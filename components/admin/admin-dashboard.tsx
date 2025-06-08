@@ -29,6 +29,7 @@ export function AdminDashboard() {
   useEffect(() => {
     // Check if user is admin
     if (user && !user.isAdmin) {
+      console.log('User is not an admin, redirecting...')
       router.push('/')
       return
     }
@@ -44,10 +45,11 @@ export function AdminDashboard() {
         // Fetch active users (logged in the last 30 days)
         const thirtyDaysAgo = new Date()
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+        const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0] // Use just the date part
         const { count: activeUserCount } = await supabase
           .from('user_profiles')
           .select('*', { count: 'exact', head: true })
-          .gt('last_login', thirtyDaysAgo.toISOString())
+          .filter('last_login', 'gte', thirtyDaysAgoStr)
         
         // Fetch product count
         const { count: productCount } = await supabase
@@ -69,19 +71,22 @@ export function AdminDashboard() {
         // Fetch last month's revenue for growth calculation
         const lastMonth = new Date()
         lastMonth.setMonth(lastMonth.getMonth() - 1)
+        const lastMonthStr = lastMonth.toISOString().split('T')[0]
+        
         const twoMonthsAgo = new Date()
         twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2)
+        const twoMonthsAgoStr = twoMonthsAgo.toISOString().split('T')[0]
         
         const { data: lastMonthData } = await supabase
           .from('orders')
           .select('total_amount')
-          .gte('created_at', lastMonth.toISOString())
+          .filter('created_at', 'gte', lastMonthStr)
         
         const { data: previousMonthData } = await supabase
           .from('orders')
           .select('total_amount')
-          .gte('created_at', twoMonthsAgo.toISOString())
-          .lt('created_at', lastMonth.toISOString())
+          .filter('created_at', 'gte', twoMonthsAgoStr)
+          .filter('created_at', 'lt', lastMonthStr)
         
         const lastMonthRevenue = lastMonthData?.reduce((sum, order) => sum + order.total_amount, 0) || 0
         const previousMonthRevenue = previousMonthData?.reduce((sum, order) => sum + order.total_amount, 0) || 0

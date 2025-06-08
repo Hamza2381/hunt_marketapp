@@ -17,7 +17,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Plus, Edit, Trash2, FolderOpen, Loader2, AlertTriangle, Search } from "lucide-react"
+import { Plus, Edit, Trash2, FolderOpen, Loader2, AlertTriangle, Search, RefreshCw } from "lucide-react"
 import { supabase } from "@/lib/supabase-client"
 import { useToast } from "@/hooks/use-toast"
 import { Switch } from "@/components/ui/switch"
@@ -40,48 +40,49 @@ export function CategoryManagement() {
     status: "active" as "active" | "inactive",
   })
 
-  // Fetch categories and count products
-  useEffect(() => {
-    const fetchCategories = async () => {
-      setIsLoading(true)
-      setError(null)
-      try {
-        // Fetch categories
-        const { data: categoriesData, error: categoriesError } = await supabase
-          .from('categories')
-          .select('*')
-          .order('name')
+  // Function to refresh categories data
+  const refreshCategories = async () => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      // Fetch categories
+      const { data: categoriesData, error: categoriesError } = await supabase
+        .from('categories')
+        .select('*')
+        .order('name')
+      
+      if (categoriesError) throw categoriesError
+      
+      // Get product counts for each category
+      const categoriesWithCounts = await Promise.all(categoriesData.map(async (category) => {
+        const { count } = await supabase
+          .from('products')
+          .select('*', { count: 'exact', head: true })
+          .eq('category_id', category.id)
         
-        if (categoriesError) throw categoriesError
-        
-        // Get product counts for each category
-        const categoriesWithCounts = await Promise.all(categoriesData.map(async (category) => {
-          const { count } = await supabase
-            .from('products')
-            .select('*', { count: 'exact', head: true })
-            .eq('category_id', category.id)
-          
-          return {
-            ...category,
-            productCount: count || 0
-          }
-        }))
-        
-        setCategories(categoriesWithCounts || [])
-      } catch (err: any) {
-        console.error('Error fetching categories:', err.message)
-        setError('Failed to load categories. Please try again.')
-        toast({
-          title: 'Error',
-          description: 'Failed to load categories data.',
-          variant: 'destructive',
-        })
-      } finally {
-        setIsLoading(false)
-      }
+        return {
+          ...category,
+          productCount: count || 0
+        }
+      }))
+      
+      setCategories(categoriesWithCounts || [])
+    } catch (err: any) {
+      console.error('Error fetching categories:', err.message)
+      setError('Failed to load categories. Please try again.')
+      toast({
+        title: 'Error',
+        description: 'Failed to load categories data.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsLoading(false)
     }
-    
-    fetchCategories()
+  }
+  
+  // Fetch categories on component mount
+  useEffect(() => {
+    refreshCategories()
   }, [])
 
   const filteredCategories = categories.filter((category) => 
@@ -101,6 +102,8 @@ export function CategoryManagement() {
         return
       }
       
+      console.log("Adding new category:", categoryForm.name);
+      
       // Insert new category
       const { data, error } = await supabase
         .from('categories')
@@ -111,23 +114,14 @@ export function CategoryManagement() {
         }])
         .select()
       
-      if (error) throw error
+      if (error) {
+        console.error("Error inserting category:", error);
+        throw error;
+      }
       
-      // Refresh categories list
-      const { data: categoriesData, error: categoriesError } = await supabase
-        .from('categories')
-        .select('*')
-        .order('name')
-      
-      if (categoriesError) throw categoriesError
-      
-      // Add product count of 0 to new categories
-      const categoriesWithCounts = categoriesData.map(category => ({
-        ...category,
-        productCount: categories.find(c => c.id === category.id)?.productCount || 0
-      }))
-      
-      setCategories(categoriesWithCounts)
+      console.log("Category added successfully, refreshing list");
+      // Refresh categories
+      await refreshCategories()
       setIsAddCategoryOpen(false)
       setCategoryForm({
         name: "",
@@ -173,6 +167,8 @@ export function CategoryManagement() {
         return
       }
       
+      console.log("Updating category:", selectedCategory.id, categoryForm.name);
+      
       // Update category
       const { error } = await supabase
         .from('categories')
@@ -183,14 +179,14 @@ export function CategoryManagement() {
         })
         .eq('id', selectedCategory.id)
       
-      if (error) throw error
+      if (error) {
+        console.error("Error updating category:", error);
+        throw error;
+      }
       
-      // Update local state
-      setCategories(categories.map(category => 
-        category.id === selectedCategory.id 
-          ? { ...category, name: categoryForm.name, description: categoryForm.description, status: categoryForm.status }
-          : category
-      ))
+      console.log("Category updated successfully, refreshing list");
+      // Refresh categories
+      await refreshCategories()
       
       setIsEditCategoryOpen(false)
       setSelectedCategory(null)
@@ -223,15 +219,21 @@ export function CategoryManagement() {
     if (!confirm(`Are you sure you want to delete ${category.name}?`)) return
     
     try {
+      console.log("Deleting category:", category.id, category.name);
+      
       const { error } = await supabase
         .from('categories')
         .delete()
         .eq('id', category.id)
       
-      if (error) throw error
+      if (error) {
+        console.error("Error deleting category:", error);
+        throw error;
+      }
       
-      // Update local state
-      setCategories(categories.filter(c => c.id !== category.id))
+      console.log("Category deleted successfully, refreshing list");
+      // Refresh categories
+      await refreshCategories()
       
       toast({
         title: 'Category Deleted',
@@ -319,6 +321,9 @@ export function CategoryManagement() {
             onChange={(e) => setSearchTerm(e.target.value)}
             className="max-w-sm"
           />
+          <Button variant="outline" onClick={refreshCategories} title="Refresh categories">
+            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
         </div>
         
         {isLoading ? (
@@ -330,7 +335,7 @@ export function CategoryManagement() {
           <div className="py-8 text-center">
             <AlertTriangle className="h-8 w-8 text-red-500 mx-auto" />
             <p className="text-sm text-red-500 mt-2">{error}</p>
-            <Button variant="outline" size="sm" className="mt-4" onClick={() => window.location.reload()}>
+            <Button variant="outline" size="sm" className="mt-4" onClick={refreshCategories}>
               Try Again
             </Button>
           </div>

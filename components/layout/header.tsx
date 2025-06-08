@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useAuth } from "@/hooks/use-auth"
 import { useToast } from "@/hooks/use-toast"
+import { useCart } from "@/hooks/use-cart"
 
 export function Header() {
   const { user, isAuthenticated, logout } = useAuth()
@@ -34,6 +35,13 @@ export function Header() {
   const router = useRouter()
   const pathname = usePathname()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const { getItemCount, items } = useCart()
+  const [cartItemCount, setCartItemCount] = useState(0)
+  
+  // Update cart item count whenever items change
+  useEffect(() => {
+    setCartItemCount(getItemCount())
+  }, [items, getItemCount])
 
   useEffect(() => {
     // Close mobile menu when path changes
@@ -112,7 +120,9 @@ export function Header() {
                 {/* Cart Link */}
                 <Link href="/cart" className="p-2 relative">
                   <ShoppingCart className="h-5 w-5 text-gray-600" />
-                  <Badge className="absolute -top-1 -right-1 px-1.5 py-0.5 text-xs">3</Badge>
+                  {cartItemCount > 0 && (
+                    <Badge className="absolute -top-1 -right-1 px-1.5 py-0.5 text-xs">{cartItemCount}</Badge>
+                  )}
                 </Link>
 
                 {/* User Dropdown */}

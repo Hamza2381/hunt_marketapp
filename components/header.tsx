@@ -5,17 +5,50 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { UserCircle2 } from "lucide-react"
+import { UserCircle2, ShoppingCart } from "lucide-react"
 import { useAuth } from "@/hooks/use-auth"
+import { useCart } from "@/hooks/use-cart"
 
 export default function Header() {
   const { user, isAuthenticated } = useAuth()
+  const { getItemCount, items } = useCart()
   const pathname = usePathname()
   const [creditInfo, setCreditInfo] = useState({
     available: 0,
     limit: 0,
     used: 0,
   })
+  const [cartItemCount, setCartItemCount] = useState(0)
+  
+  // Initialize localStorage if needed (client-side only)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      // Clear any invalid cart data
+      try {
+        const cartData = localStorage.getItem('cart')
+        
+        if (cartData && cartData.includes('"3"')) {
+          console.warn('Found static cart value, resetting')
+          localStorage.removeItem('cart')
+        }
+        
+        if (cartData) {
+          try {
+            const parsedCart = JSON.parse(cartData)
+            if (!Array.isArray(parsedCart)) {
+              console.warn('Invalid cart format in localStorage, resetting')
+              localStorage.removeItem('cart')
+            }
+          } catch (e) {
+            console.error('Error parsing cart data:', e)
+            localStorage.removeItem('cart')
+          }
+        }
+      } catch (error) {
+        console.error('Error checking cart data:', error)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (user) {
@@ -26,6 +59,13 @@ export default function Header() {
       })
     }
   }, [user])
+
+  // Immediately update cart count when items change
+  useEffect(() => {
+    const count = getItemCount()
+    console.log('Current cart count:', count, 'Items:', items.length)
+    setCartItemCount(count)
+  }, [items, getItemCount])
 
   // Don't show header on login or admin pages
   if (pathname.startsWith("/login") || pathname.startsWith("/admin")) {
@@ -67,8 +107,9 @@ export default function Header() {
             {isAuthenticated ? (
               <div className="flex items-center space-x-4">
                 <Link href="/cart">
-                  <Badge variant="outline" className="hover:bg-gray-100">
-                    Cart
+                  <Badge variant="outline" className="hover:bg-gray-100 flex items-center gap-1">
+                    <ShoppingCart className="h-4 w-4" />
+                    <span>{cartItemCount > 0 ? `Cart (${cartItemCount})` : 'Cart'}</span>
                   </Badge>
                 </Link>
                 

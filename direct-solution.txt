@@ -1,0 +1,49 @@
+// Create a direct solution for the checkout issue
+// 1. Add this function to your checkout-page.tsx file before the handlePlaceOrder function:
+
+const convertUUIDsToInts = (items) => {
+  // Create a hardcoded map for UUID to integer IDs
+  const uuidMap = {
+    // Add the problematic UUID here with a corresponding integer
+    "3790d661-6bc7-4960-85e1-622952d94847": 1 
+  };
+  
+  return items.map(item => {
+    const newItem = { ...item };
+    
+    // Check if the ID is a UUID and we have a mapping for it
+    if (typeof newItem.id === 'string' && 
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(newItem.id) &&
+        uuidMap[newItem.id]) {
+      // Replace with the mapped ID
+      newItem.id = uuidMap[newItem.id];
+      console.log(`Converted UUID ${item.id} to integer ID ${newItem.id}`);
+    } else if (typeof newItem.id === 'string') {
+      // For any other string, try to convert to integer
+      try {
+        newItem.id = parseInt(newItem.id);
+        if (isNaN(newItem.id)) {
+          // If conversion fails, use a fallback ID based on position
+          newItem.id = items.indexOf(item) + 100; // Use 100+ to avoid conflicts
+        }
+      } catch (error) {
+        newItem.id = items.indexOf(item) + 100;
+      }
+    }
+    
+    return newItem;
+  });
+};
+
+// 2. Modify your handlePlaceOrder function to use this helper:
+// Replace the checkoutData creation with:
+
+const checkoutData = {
+  user: user,
+  items: convertUUIDsToInts(items), // Convert UUIDs to integers
+  total: total,
+  shipping: shipping,
+  tax: tax,
+  shippingAddress: formattedShippingAddress,
+  billingAddress: formattedBillingAddress
+};

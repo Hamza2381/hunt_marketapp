@@ -206,6 +206,7 @@ export function AccountPage() {
     .reduce((sum, inv) => sum + inv.total, 0)
 
   return (
+    
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="container mx-auto px-4">
         <div className="mb-8">
@@ -235,7 +236,7 @@ export function AccountPage() {
             Logout
           </Button>
         </div>
-
+        <Tabs>
           <TabsContent value="profile">
             <Card>
               <CardHeader>
@@ -791,7 +792,8 @@ export function AccountPage() {
             </Card>
           </TabsContent>
         </Tabs>
+        </div>
       </div>
-    </div>
+ 
   )
 }

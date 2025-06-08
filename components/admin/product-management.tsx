@@ -18,7 +18,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Plus, Edit, Trash2, Search, Package, Loader2, AlertTriangle } from "lucide-react"
+import { Plus, Edit, Trash2, Search, Package, Loader2, AlertTriangle, RefreshCw } from "lucide-react"
 import { supabase } from "@/lib/supabase-client"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/hooks/use-auth"
@@ -47,44 +47,45 @@ export function ProductManagement() {
     image_url: "",
   })
 
-  // Fetch products and categories
-  useEffect(() => {
-    const fetchData = async () => {
-      setIsLoading(true)
-      setError(null)
-      try {
-        // Fetch products
-        const { data: productsData, error: productsError } = await supabase
-          .from('products')
-          .select('*')
-          .order('created_at', { ascending: false })
-        
-        if (productsError) throw productsError
-        
-        // Fetch categories
-        const { data: categoriesData, error: categoriesError } = await supabase
-          .from('categories')
-          .select('*')
-          .order('name')
-        
-        if (categoriesError) throw categoriesError
-        
-        setProducts(productsData || [])
-        setCategories(categoriesData || [])
-      } catch (err: any) {
-        console.error('Error fetching products data:', err.message)
-        setError('Failed to load products. Please try again.')
-        toast({
-          title: 'Error',
-          description: 'Failed to load products data.',
-          variant: 'destructive',
-        })
-      } finally {
-        setIsLoading(false)
-      }
+  // Function to refresh products and categories
+  const refreshData = async () => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      // Fetch products
+      const { data: productsData, error: productsError } = await supabase
+        .from('products')
+        .select('*')
+        .order('created_at', { ascending: false })
+      
+      if (productsError) throw productsError
+      
+      // Fetch categories
+      const { data: categoriesData, error: categoriesError } = await supabase
+        .from('categories')
+        .select('*')
+        .order('name')
+      
+      if (categoriesError) throw categoriesError
+      
+      setProducts(productsData || [])
+      setCategories(categoriesData || [])
+    } catch (err: any) {
+      console.error('Error fetching products data:', err.message)
+      setError('Failed to load products. Please try again.')
+      toast({
+        title: 'Error',
+        description: 'Failed to load products data.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsLoading(false)
     }
-    
-    fetchData()
+  }
+
+  // Fetch products and categories on component mount
+  useEffect(() => {
+    refreshData()
   }, [])
 
   const filteredProducts = products.filter(
@@ -112,34 +113,31 @@ export function ProductManagement() {
         return
       }
       
+      console.log("Adding new product:", productForm.name);
+      
       // Insert new product
       const { data, error } = await supabase
         .from('products')
-        .insert([
-          {
-            name: productForm.name,
-            sku: productForm.sku,
-            description: productForm.description || null,
-            category_id: parseInt(productForm.category_id),
-            price: productForm.price,
-            stock_quantity: productForm.stock_quantity,
-            status: productForm.stock_quantity > 0 ? productForm.status : 'out_of_stock',
-            image_url: productForm.image_url || null,
-          }
-        ])
+        .insert([{
+          name: productForm.name,
+          sku: productForm.sku,
+          description: productForm.description || null,
+          category_id: parseInt(productForm.category_id),
+          price: productForm.price,
+          stock_quantity: productForm.stock_quantity,
+          status: productForm.stock_quantity > 0 ? productForm.status : 'out_of_stock',
+          image_url: productForm.image_url || null,
+        }])
         .select()
       
-      if (error) throw error
+      if (error) {
+        console.error("Error inserting product:", error);
+        throw error;
+      }
       
-      // Refresh products list
-      const { data: productsData, error: productsError } = await supabase
-        .from('products')
-        .select('*')
-        .order('created_at', { ascending: false })
-      
-      if (productsError) throw productsError
-      
-      setProducts(productsData || [])
+      console.log("Product added successfully, refreshing products list");
+      // Refresh product list
+      await refreshData()
       setIsAddProductOpen(false)
       setProductForm({
         name: "",
@@ -195,6 +193,8 @@ export function ProductManagement() {
         return
       }
       
+      console.log("Updating product:", selectedProduct.id, productForm.name);
+      
       // Update product
       const { error } = await supabase
         .from('products')
@@ -211,17 +211,14 @@ export function ProductManagement() {
         })
         .eq('id', selectedProduct.id)
       
-      if (error) throw error
+      if (error) {
+        console.error("Error updating product:", error);
+        throw error;
+      }
       
-      // Refresh products list
-      const { data: productsData, error: productsError } = await supabase
-        .from('products')
-        .select('*')
-        .order('created_at', { ascending: false })
-      
-      if (productsError) throw productsError
-      
-      setProducts(productsData || [])
+      console.log("Product updated successfully, refreshing products list");
+      // Refresh data
+      await refreshData()
       setIsEditProductOpen(false)
       setSelectedProduct(null)
       
@@ -250,8 +247,8 @@ export function ProductManagement() {
       
       if (error) throw error
       
-      // Update local state
-      setProducts(products.filter(p => p.id !== product.id))
+      // Refresh products list
+      await refreshData()
       
       toast({
         title: 'Product Deleted',
@@ -404,6 +401,9 @@ export function ProductManagement() {
             onChange={(e) => setSearchTerm(e.target.value)}
             className="max-w-sm"
           />
+          <Button variant="outline" onClick={refreshData} title="Refresh products">
+            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
         </div>
 
         {isLoading ? (
@@ -415,7 +415,7 @@ export function ProductManagement() {
           <div className="py-8 text-center">
             <AlertTriangle className="h-8 w-8 text-red-500 mx-auto" />
             <p className="text-sm text-red-500 mt-2">{error}</p>
-            <Button variant="outline" size="sm" className="mt-4" onClick={() => window.location.reload()}>
+            <Button variant="outline" size="sm" className="mt-4" onClick={refreshData}>
               Try Again
             </Button>
           </div>

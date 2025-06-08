@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext } from "react"
+import { createContext, useContext, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/hooks/use-auth"
 import type { User } from "@/hooks/use-auth"
@@ -68,6 +68,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const auth = useAuth()
   const router = useRouter()
 
+  // Memoize the auth context value to prevent unnecessary re-renders
+  const memoizedAuth = useMemo(() => auth, [auth.user, auth.isLoading, auth.isAuthenticated]);
+
   // Show loading spinner while checking auth state
   if (auth.isLoading) {
     return (
@@ -77,7 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     )
   }
 
-  return <AuthContext.Provider value={auth}>{children}</AuthContext.Provider>
+  return <AuthContext.Provider value={memoizedAuth}>{children}</AuthContext.Provider>
 }
 
 export function useAuthContext() {

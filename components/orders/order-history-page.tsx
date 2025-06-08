@@ -1,92 +1,137 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
-import { Search, Package, Eye, Download, RefreshCw } from "lucide-react"
+import { Search, Package, Eye, Download, RefreshCw, Loader2 } from "lucide-react"
 import Link from "next/link"
-
-const orders = [
-  {
-    id: "ORD-001",
-    date: "2024-01-15",
-    status: "delivered",
-    total: 156.99,
-    items: 3,
-    paymentMethod: "Credit Line",
-    trackingNumber: "1Z999AA1234567890",
-    estimatedDelivery: "2024-01-18",
-    actualDelivery: "2024-01-17",
-    items_detail: [
-      { name: "Premium Copy Paper - 500 Sheets", quantity: 3, price: 12.99 },
-      { name: "Black Ink Cartridge - HP Compatible", quantity: 2, price: 24.99 },
-      { name: "Sticky Notes - Assorted Colors", quantity: 3, price: 8.99 },
-    ],
-  },
-  {
-    id: "ORD-002",
-    date: "2024-01-20",
-    status: "shipped",
-    total: 89.99,
-    items: 2,
-    paymentMethod: "Credit Card",
-    trackingNumber: "1Z999AA1234567891",
-    estimatedDelivery: "2024-01-23",
-    actualDelivery: null,
-    items_detail: [
-      { name: "Coffee K-Cups - Variety Pack", quantity: 1, price: 32.99 },
-      { name: "All-Purpose Cleaner - 32oz", quantity: 2, price: 6.99 },
-    ],
-  },
-  {
-    id: "ORD-003",
-    date: "2024-01-22",
-    status: "processing",
-    total: 245.5,
-    items: 5,
-    paymentMethod: "Credit Line",
-    trackingNumber: null,
-    estimatedDelivery: "2024-01-26",
-    actualDelivery: null,
-    items_detail: [
-      { name: "Laser Printer Paper - Ream", quantity: 5, price: 15.99 },
-      { name: "Color Ink Cartridge Set", quantity: 2, price: 39.99 },
-      { name: "Wireless Mouse - Ergonomic Design", quantity: 1, price: 19.99 },
-    ],
-  },
-  {
-    id: "ORD-004",
-    date: "2024-01-25",
-    status: "pending",
-    total: 67.98,
-    items: 4,
-    paymentMethod: "Credit Line",
-    trackingNumber: null,
-    estimatedDelivery: "2024-01-29",
-    actualDelivery: null,
-    items_detail: [
-      { name: "Sticky Notes - Assorted Colors", quantity: 4, price: 8.99 },
-      { name: "Premium Copy Paper - 500 Sheets", quantity: 2, price: 12.99 },
-    ],
-  },
-]
+import { useAuth } from "@/hooks/use-auth"
 
 export function OrderHistoryPage() {
+  const { user } = useAuth()
+  const [orders, setOrders] = useState([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState(null)
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
-  const [expandedOrder, setExpandedOrder] = useState<string | null>(null)
+  const [expandedOrder, setExpandedOrder] = useState(null)
+
+  useEffect(() => {
+    async function fetchOrders() {
+      if (!user) {
+        setIsLoading(false);
+        return;
+      }
+
+      // First, check if we have a user mapping in localStorage from previous orders
+      let userMapping;
+      try {
+        const savedMapping = localStorage.getItem('userMapping');
+        if (savedMapping) {
+          userMapping = JSON.parse(savedMapping);
+          console.log('Found saved user mapping:', userMapping);
+        }
+      } catch (e) {
+        console.error('Error reading user mapping:', e);
+      }
+
+      try {
+        setIsLoading(true);
+        setError(null);
+
+        // Include user mapping if available
+        const body = {
+          userId: user.id,
+          userEmail: user.email,
+          // Include numeric ID if we have it
+          numericId: userMapping?.numericId
+        };
+        
+        // Call the new user-orders API
+        const response = await fetch('/api/orders/user-orders', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || 'Failed to fetch orders');
+        }
+
+        const data = await response.json();
+        
+        // Client-side filter to match orders with the current user
+        const userOrders = data.orders.filter(order => {
+          console.log(`Checking order ${order.id} with user_id ${order.user_id} against user ${user.id}`);
+          
+          // Use simplified approach: show orders with user_id = 1 
+          // since we're creating all orders with this ID temporarily
+          return order.user_id === user.id;
+          
+          // Once you implement a proper mapping table, you can use this more specific logic:
+          /*
+          return (
+            // Direct UUID match (unlikely but possible)
+            order.user_id === user.id ||
+            // Match against numeric ID from mapping
+            (userMapping?.numericId && order.user_id === userMapping.numericId) ||
+            // Match against numeric ID from response
+            (data.userMapping?.numericId && order.user_id === data.userMapping.numericId)
+          );
+          */
+        });
+        
+        // Save any user mapping returned by the API for future use
+        if (data.userMapping && data.userMapping.numericId) {
+          console.log('Saving user mapping from API response:', data.userMapping);
+          try {
+            localStorage.setItem('userMapping', JSON.stringify(data.userMapping));
+          } catch (e) {
+            console.error('Error saving user mapping:', e);
+          }
+        }
+        
+        console.log(`Showing ${userOrders.length} orders for user ${user.email}`);
+        setOrders(userOrders);
+      } catch (err) {
+        console.error('Error fetching orders:', err);
+        setError(err.message);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    fetchOrders()
+  }, [user])
+
+  // Add a filter to show only current user's orders or all orders
+  const [userFilter, setUserFilter] = useState("my"); // "all" or "my" - default to "my"
 
   const filteredOrders = orders.filter((order) => {
-    const matchesSearch = order.id.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesStatus = statusFilter === "all" || order.status === statusFilter
-    return matchesSearch && matchesStatus
-  })
+    // First apply the search and status filters
+    const matchesSearch = order.id.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesStatus = statusFilter === "all" || order.status === statusFilter;
+    
+    // Then apply the user filter if set to "my"
+    // FIXED: Use our simplified mapping approach - all user orders have user_id = 1
+    const matchesUser = userFilter === "all" || (
+      userFilter === "my" && (
+        // Match against our mapping system
+        order.user_id === user.id
+      )
+    );
+    
+    return matchesSearch && matchesStatus && matchesUser;
+  });
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status) => {
     switch (status) {
       case "pending":
         return "bg-yellow-100 text-yellow-800"
@@ -103,7 +148,7 @@ export function OrderHistoryPage() {
     }
   }
 
-  const getStatusIcon = (status: string) => {
+  const getStatusIcon = (status) => {
     switch (status) {
       case "pending":
         return "⏳"
@@ -118,6 +163,33 @@ export function OrderHistoryPage() {
       default:
         return "📦"
     }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-8 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-blue-600" />
+          <h2 className="text-xl font-medium">Loading your orders...</h2>
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-8">
+        <div className="container mx-auto px-4">
+          <Card>
+            <CardContent className="text-center py-12">
+              <h3 className="text-lg font-medium text-red-600 mb-2">Error loading orders</h3>
+              <p className="text-gray-600 mb-6">{error}</p>
+              <Button onClick={() => window.location.reload()}>Try Again</Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -140,19 +212,31 @@ export function OrderHistoryPage() {
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-40">
-                  <SelectValue placeholder="Filter by status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Orders</SelectItem>
-                  <SelectItem value="pending">Pending</SelectItem>
-                  <SelectItem value="processing">Processing</SelectItem>
-                  <SelectItem value="shipped">Shipped</SelectItem>
-                  <SelectItem value="delivered">Delivered</SelectItem>
-                  <SelectItem value="cancelled">Cancelled</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="flex gap-2">
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="w-40">
+                    <SelectValue placeholder="Filter by status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Statuses</SelectItem>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="processing">Processing</SelectItem>
+                    <SelectItem value="shipped">Shipped</SelectItem>
+                    <SelectItem value="delivered">Delivered</SelectItem>
+                    <SelectItem value="cancelled">Cancelled</SelectItem>
+                  </SelectContent>
+                </Select>
+                
+                <Select value={userFilter} onValueChange={setUserFilter}>
+                  <SelectTrigger className="w-40">
+                    <SelectValue placeholder="Filter by user" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Orders</SelectItem>
+                    <SelectItem value="my">My Orders</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -173,7 +257,7 @@ export function OrderHistoryPage() {
                     <div className="text-sm text-gray-600 mt-1">
                       <p>Ordered on {new Date(order.date).toLocaleDateString()}</p>
                       <p>
-                        {order.items} items • ${order.total} • {order.paymentMethod}
+                        {order.items} items • ${order.total.toFixed(2)} • {order.paymentMethod}
                       </p>
                     </div>
                   </div>
@@ -248,7 +332,7 @@ export function OrderHistoryPage() {
                   <div className="flex space-x-2 mt-6 pt-4 border-t">
                     {order.trackingNumber && (
                       <Button variant="outline" size="sm" asChild>
-                        <Link href={`/orders/${order.id}/tracking`}>
+                        <Link href={`/orders/${order.orderId}/tracking`}>
                           <Package className="h-4 w-4 mr-1" />
                           Track Package
                         </Link>

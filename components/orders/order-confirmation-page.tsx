@@ -1,34 +1,138 @@
 "use client"
 
+import { useEffect, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import { CheckCircle, Package, Mail, Calendar, CreditCard } from "lucide-react"
+import { CheckCircle, Package, Mail, Calendar, CreditCard, Loader2 } from "lucide-react"
+import { supabase } from "@/lib/supabase-client"
 import Link from "next/link"
 
+interface OrderItem {
+  id: number
+  product_id: number
+  quantity: number
+  unit_price: number
+  total_price: number
+  product_name: string
+}
+
+interface Order {
+  id: number
+  order_number: string
+  user_id: string
+  total_amount: number
+  payment_method: string
+  status: string
+  shipping_address: string
+  billing_address: string
+  special_instructions?: string
+  created_at: string
+  updated_at: string
+  items: OrderItem[]
+}
+
 export function OrderConfirmationPage() {
-  const order = {
-    id: "ORD-005",
-    date: new Date().toISOString(),
-    total: 156.99,
-    paymentMethod: "Credit Line",
-    estimatedDelivery: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
-    items: [
-      { name: "Premium Copy Paper - 500 Sheets", quantity: 3, price: 12.99 },
-      { name: "Black Ink Cartridge - HP Compatible", quantity: 2, price: 24.99 },
-      { name: "Coffee K-Cups - Variety Pack", quantity: 1, price: 32.99 },
-    ],
-    shippingAddress: {
-      name: "John Doe",
-      company: "Acme Corp",
-      address: "123 Business Street, Suite 100",
-      city: "Business City, BC 12345",
-    },
+  const searchParams = useSearchParams()
+  const orderId = searchParams.get('orderId')
+  
+  const [order, setOrder] = useState<Order | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    async function fetchOrder() {
+      setIsLoading(true)
+      setError(null)
+
+      try {
+        if (!orderId) {
+          throw new Error('Order ID is required')
+        }
+
+        // Fetch order from our API endpoint
+        const response = await fetch(`/api/orders?orderId=${orderId}`)
+        
+        // Check if the request was successful
+        if (!response.ok) {
+          const errorData = await response.json()
+          throw new Error(errorData.error || 'Failed to fetch order')
+        }
+        
+        // Get the order data
+        const orderData = await response.json()
+        console.log('Fetched order:', orderData)
+        
+        // Set the order data
+        setOrder(orderData)
+      } catch (err: any) {
+        console.error('Failed to fetch order:', err)
+        setError(err.message || 'Failed to load order details')
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    fetchOrder()
+  }, [orderId])
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-8 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-green-600" />
+          <h2 className="text-xl font-medium">Loading order details...</h2>
+        </div>
+      </div>
+    )
   }
 
-  const subtotal = order.items.reduce((sum, item) => sum + item.price * item.quantity, 0)
-  const shipping = 0
+  if (error || !order) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-8">
+        <div className="container mx-auto px-4 max-w-4xl text-center">
+          <div className="bg-red-100 p-4 rounded-full inline-flex mx-auto mb-4">
+            <CheckCircle className="h-12 w-12 text-red-600" />
+          </div>
+          <h1 className="text-3xl font-bold text-red-600 mb-2">Order Not Found</h1>
+          <p className="text-gray-600 mb-6">{error || 'Unable to load order details'}</p>
+          <Button asChild>
+            <Link href="/">Return to Home</Link>
+          </Button>
+        </div>
+      </div>
+    )
+  }
+  
+  // Parse addresses - handle both JSON and plain text formats
+  let shippingAddress;
+  try {
+    // Try to parse as JSON first
+    shippingAddress = JSON.parse(order.shipping_address || '{}');
+  } catch (e) {
+    // If it's not valid JSON, it's probably a plain string
+    const addressStr = order.shipping_address || '';
+    // Create a simple object with just the full address
+    shippingAddress = { fullAddress: addressStr };
+  }
+  
+  // Do the same for billing address
+  let billingAddress;
+  try {
+    billingAddress = JSON.parse(order.billing_address || '{}');
+  } catch (e) {
+    const addressStr = order.billing_address || '';
+    billingAddress = { fullAddress: addressStr };
+  }
+  const orderDate = new Date(order.created_at)
+  const estimatedDelivery = new Date(orderDate)
+  estimatedDelivery.setDate(estimatedDelivery.getDate() + 3) // Estimated delivery is 3 days after order date
+
+  // Calculate order totals
+  const subtotal = order.items.reduce((sum, item) => sum + item.unit_price * item.quantity, 0)
+  const shipping = 0 // Free shipping
   const tax = subtotal * 0.08
 
   return (
@@ -42,7 +146,8 @@ export function OrderConfirmationPage() {
             </div>
           </div>
           <h1 className="text-3xl font-bold text-green-600 mb-2">Order Confirmed!</h1>
-          <p className="text-gray-600">Thank you for your order. We'll send you a confirmation email shortly.</p>
+          <p className="text-gray-600 mb-2">Thank you for your order. We'll send you a confirmation email shortly.</p>
+          <p className="text-lg font-medium">Order #{order.order_number}</p>
         </div>
 
         <div className="grid lg:grid-cols-3 gap-8">
@@ -56,19 +161,19 @@ export function OrderConfirmationPage() {
                   <span>Order Summary</span>
                 </CardTitle>
                 <div className="text-sm text-gray-600">
-                  <p>Order #{order.id}</p>
-                  <p>Placed on {new Date(order.date).toLocaleDateString()}</p>
+                  <p>Order #{order.order_number}</p>
+                  <p>Placed on {new Date(order.created_at).toLocaleDateString()}</p>
                 </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {order.items.map((item, index) => (
-                    <div key={index} className="flex justify-between">
+                  {order.items.map((item) => (
+                    <div key={item.id} className="flex justify-between">
                       <div>
-                        <p className="font-medium">{item.name}</p>
+                        <p className="font-medium">{item.product_name || `Product #${item.product_id}`}</p>
                         <p className="text-sm text-gray-500">Quantity: {item.quantity}</p>
                       </div>
-                      <p className="font-medium">${(item.price * item.quantity).toFixed(2)}</p>
+                      <p className="font-medium">${(item.unit_price * item.quantity).toFixed(2)}</p>
                     </div>
                   ))}
 
@@ -90,7 +195,7 @@ export function OrderConfirmationPage() {
                     <Separator />
                     <div className="flex justify-between text-lg font-bold">
                       <span>Total</span>
-                      <span>${order.total.toFixed(2)}</span>
+                      <span>${order.total_amount.toFixed(2)}</span>
                     </div>
                   </div>
                 </div>
@@ -104,17 +209,26 @@ export function OrderConfirmationPage() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
-                  <p className="font-medium">{order.shippingAddress.name}</p>
-                  <p>{order.shippingAddress.company}</p>
-                  <p>{order.shippingAddress.address}</p>
-                  <p>{order.shippingAddress.city}</p>
+                  {shippingAddress.fullAddress ? (
+                    // Plain text address format
+                    <p>{shippingAddress.fullAddress}</p>
+                  ) : (
+                    // JSON object format
+                    <>
+                      <p className="font-medium">{shippingAddress.name}</p>
+                      <p>{shippingAddress.company}</p>
+                      <p>{shippingAddress.street}{shippingAddress.street2 ? `, ${shippingAddress.street2}` : ''}</p>
+                      <p>{shippingAddress.city}, {shippingAddress.state} {shippingAddress.zipCode}</p>
+                      {shippingAddress.phone && <p>Phone: {shippingAddress.phone}</p>}
+                    </>
+                  )}
                 </div>
                 <div className="mt-4 p-3 bg-blue-50 rounded-lg">
                   <div className="flex items-center space-x-2">
                     <Calendar className="h-4 w-4 text-blue-600" />
                     <span className="text-sm font-medium">Estimated Delivery:</span>
                   </div>
-                  <p className="text-blue-600 font-medium">{new Date(order.estimatedDelivery).toLocaleDateString()}</p>
+                  <p className="text-blue-600 font-medium">{estimatedDelivery.toLocaleDateString()}</p>
                 </div>
               </CardContent>
             </Card>
@@ -134,7 +248,7 @@ export function OrderConfirmationPage() {
                 <div className="space-y-2">
                   <div className="flex justify-between">
                     <span>Method:</span>
-                    <Badge variant="outline">{order.paymentMethod}</Badge>
+                    <Badge variant="outline">{order.payment_method}</Badge>
                   </div>
                   <div className="flex justify-between">
                     <span>Status:</span>

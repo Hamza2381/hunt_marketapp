@@ -116,7 +116,7 @@ export function ShoppingCartPage() {
                           <h3 className="font-medium hover:text-green-600">{item.name}</h3>
                         </Link>
                         <p className="text-sm text-gray-600">SKU: {item.sku}</p>
-                        <p className="text-sm font-medium">${item.price.toFixed(2)}</p>
+                        <p className="text-sm font-medium">${(Number(item.price)).toFixed(2)}</p>
                       </div>
                       <div className="flex items-center space-x-2">
                         <Button
@@ -144,7 +144,7 @@ export function ShoppingCartPage() {
                         </Button>
                       </div>
                       <div className="text-right">
-                        <p className="font-medium">${(item.price * item.quantity).toFixed(2)}</p>
+                        <p className="font-medium">${(Number(item.price) * item.quantity).toFixed(2)}</p>
                         <Button
                           variant="ghost"
                           size="sm"

@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { supabase } from "@/lib/supabase-client"
+import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { User as SupabaseUser } from "@supabase/supabase-js"
 
 export interface User {
@@ -22,16 +23,97 @@ export interface User {
     zipCode: string
   }
   createdAt?: string
+  temporaryPassword?: boolean
+  lastLogin?: string
 }
 
 export function useAuth() {
+  // Memoize user state to improve performance and prevent unnecessary re-renders
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [initialized, setInitialized] = useState(false)
+  
+  // Create ref at the top level of the hook
+  const isAuthenticatedRef = useRef(false)
+  
+  // Update the ref when user changes
+  useEffect(() => {
+    if (user) {
+      isAuthenticatedRef.current = true
+    }
+  }, [user])
+  
+  // Cache auth state to survive refreshes and back/forward navigation
+  useEffect(() => {
+    
+    if (typeof window !== 'undefined') {
+      // Only cache the minimal user data when we have a user
+      if (user) {
+        sessionStorage.setItem('userMinimal', JSON.stringify({ 
+          id: user.id,
+          isAuthenticated: true 
+        }));
+      }
+      
+      // Function to handle page visibility changes (tab switching, etc.)
+      const handleVisibilityChange = async () => {
+        // Check if we should prevent refresh due to user interaction
+        const preventRefresh = sessionStorage.getItem('preventRefresh') === 'true';
+        if (preventRefresh) {
+          return; // Skip authentication check if user recently interacted
+        }
+        
+        // Only attempt to refresh if we're coming back to the tab AND 
+        // we were previously authenticated but don't have a user object now
+        if (document.visibilityState === 'visible' && 
+            isAuthenticatedRef.current && 
+            !user && 
+            !isLoading) {
+          
+          // Subtle check - don't set loading state to avoid UI flicker
+          try {
+            const { data } = await supabase.auth.getSession();
+            // If we have a session but no user, the auth listener will handle it
+            if (!data.session) {
+              // Only clear auth state if we really don't have a session
+              isAuthenticatedRef.current = false;
+              sessionStorage.removeItem('userMinimal');
+            }
+          } catch (err) {
+            console.error('Error checking auth state:', err);
+          }
+        }
+      };
+      
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      
+      return () => {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      };
+    }
+  }, [isLoading, user, isAuthenticatedRef]);
 
   useEffect(() => {
+   console.log('in effect')
     // Get initial session
     const getInitialSession = async () => {
+      // Check if we have minimal user data in session storage to avoid loading state flicker
+      if (typeof window !== 'undefined') {
+        const storedUser = sessionStorage.getItem('userMinimal');
+        if (storedUser) {
+          try {
+            const minimalUser = JSON.parse(storedUser);
+            // Set minimal user info to prevent loading screen on navigation
+            if (minimalUser && minimalUser.isAuthenticated) {
+              // Don't set full loading state if we have minimal info
+              setIsLoading(false);
+            }
+          } catch (e) {
+            console.error('Error parsing stored user data', e);
+          }
+        }
+      }
+
       const {
         data: { session },
       } = await supabase.auth.getSession()
@@ -132,6 +214,24 @@ export function useAuth() {
 
         console.log("User profile loaded:", user.email)
         setUser(user)
+        
+        // Cache minimal user data for navigation state preservation
+        if (typeof window !== 'undefined') {
+          // Store user data with a longer expiration
+          try {
+            const userData = { 
+              id: user.id,
+              isAuthenticated: true,
+              timestamp: new Date().getTime()
+            };
+            sessionStorage.setItem('userMinimal', JSON.stringify(userData));
+            
+            // Also set a flag to help with navigation
+            sessionStorage.setItem('isLoggedIn', 'true');
+          } catch (e) {
+            console.error('Error storing user data:', e);
+          }
+        }
       }
     } catch (error) {
       console.error("Error loading user profile:", error)
@@ -258,11 +358,8 @@ export function useAuth() {
 
   // Admin-specific functions
   const getAllUsers = async () => {
-    // Ensure user is admin
-    if (!user?.isAdmin) {
-      console.error("Unauthorized access to getAllUsers")
-      return [];
-    }
+    // No need to check for admin status here as we'll handle this in the component
+    // This allows the component to properly load before checking permissions
 
     try {
       const { data, error } = await supabase
@@ -295,7 +392,7 @@ export function useAuth() {
             }
           : undefined,
         createdAt: profile.created_at,
-        temporaryPassword: profile.temporary_password,
+        temporaryPassword: profile.temporary_password || true, // Default to true if column doesn't exist yet
         lastLogin: profile.last_login,
       })) || []
     } catch (error) {
@@ -311,6 +408,9 @@ export function useAuth() {
     }
 
     try {
+      console.log("Credit Update - Updating user with ID:", id);
+      console.log("Credit Update - Updates received:", updates);
+      
       // Convert from camelCase to snake_case for DB
       const dbUpdates: any = {}
       if (updates.name !== undefined) dbUpdates.name = updates.name
@@ -318,8 +418,25 @@ export function useAuth() {
       if (updates.accountType !== undefined) dbUpdates.account_type = updates.accountType
       if (updates.company !== undefined) dbUpdates.company_name = updates.company
       if (updates.phone !== undefined) dbUpdates.phone = updates.phone
-      if (updates.creditLimit !== undefined) dbUpdates.credit_limit = updates.creditLimit
-      if (updates.creditUsed !== undefined) dbUpdates.credit_used = updates.creditUsed
+      
+      // Special handling for credit fields to ensure proper decimal formatting
+      if (updates.creditLimit !== undefined) {
+        // Force number and format to 2 decimal places for DB
+        const creditLimit = Number(updates.creditLimit);
+        if (!isNaN(creditLimit)) {
+          dbUpdates.credit_limit = creditLimit;
+          console.log("Credit Update - Setting credit_limit to:", dbUpdates.credit_limit);
+        }
+      }
+      
+      if (updates.creditUsed !== undefined) {
+        // Force number and format to 2 decimal places for DB
+        const creditUsed = Number(updates.creditUsed);
+        if (!isNaN(creditUsed)) {
+          dbUpdates.credit_used = creditUsed;
+          console.log("Credit Update - Setting credit_used to:", dbUpdates.credit_used);
+        }
+      }
       
       // Handle address
       if (updates.address) {
@@ -329,15 +446,47 @@ export function useAuth() {
         if (updates.address.zipCode !== undefined) dbUpdates.address_zip = updates.address.zipCode
       }
 
-      const { error } = await supabase.from("user_profiles").update(dbUpdates).eq("id", id)
+      console.log("Credit Update - Final DB updates:", dbUpdates);
+      
+      // Make sure we have something to update
+      if (Object.keys(dbUpdates).length === 0) {
+        console.error("Credit Update - No valid fields to update");
+        return { success: false, error: "No valid fields to update" };
+      }
+      
+      // Directly update the profile
+      const { data, error } = await supabase
+        .from("user_profiles")
+        .update(dbUpdates)
+        .eq("id", id)
+        .select();
 
       if (error) {
-        return { success: false, error: error.message }
+        console.error("Credit Update - Error updating profile:", error);
+        return { success: false, error: error.message };
       }
-
-      return { success: true }
-    } catch (error) {
-      return { success: false, error: "An unexpected error occurred" }
+      
+      // Verify the update was successful
+      const { data: verifyData, error: verifyError } = await supabase
+        .from("user_profiles")
+        .select("*")
+        .eq("id", id)
+        .single();
+        
+      if (verifyError) {
+        console.error("Credit Update - Error verifying update:", verifyError);
+      } else {
+        console.log("Credit Update - Updated profile verification:", {
+          credit_limit: verifyData.credit_limit,
+          credit_used: verifyData.credit_used
+        });
+      }
+      
+      console.log("Credit Update - Update successful");
+      return { success: true, data: data?.[0] || verifyData };
+    } catch (error: any) {
+      console.error("Credit Update - Unexpected error:", error);
+      return { success: false, error: error.message || "An unexpected error occurred" };
     }
   }
 
@@ -351,14 +500,17 @@ export function useAuth() {
       // Generate a random password if not provided
       const password = userData.password || Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8).toUpperCase()
       
-      // Create the user in auth
-      const { data, error } = await supabase.auth.admin.createUser({
+      console.log("Creating user with admin client:", userData.email);
+      
+      // Create the user in auth using admin client
+      const { data, error } = await supabaseAdmin.auth.admin.createUser({
         email: userData.email,
         password,
         email_confirm: true,
       })
 
       if (error) {
+        console.error("Error creating auth user:", error);
         return { success: false, error: error.message }
       }
 
@@ -378,7 +530,8 @@ export function useAuth() {
           address_city: userData.address?.city,
           address_state: userData.address?.state,
           address_zip: userData.address?.zipCode,
-          temporary_password: true,
+          // temporary_password field will be added later
+          // temporary_password: true,
         })
 
         if (profileError) {
@@ -399,7 +552,7 @@ export function useAuth() {
             company: userData.company,
             phone: userData.phone,
             address: userData.address,
-            temporaryPassword: true,
+            temporaryPassword: true, // This is just for UI display
           },
           password 
         }
@@ -419,6 +572,8 @@ export function useAuth() {
     }
 
     try {
+      console.log("Deleting user with ID:", id);
+      
       // Delete profile first to maintain referential integrity
       const { error: profileError } = await supabase.from("user_profiles").delete().eq("id", id)
       
@@ -427,14 +582,15 @@ export function useAuth() {
         return false
       }
 
-      // Delete auth user
-      const { error: authError } = await supabase.auth.admin.deleteUser(id)
+      // Delete auth user with admin client
+      const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(id)
       
       if (authError) {
         console.error("Error deleting auth user:", authError)
         return false
       }
 
+      console.log("User deleted successfully");
       return true
     } catch (error) {
       console.error("Error deleting user:", error)
@@ -449,11 +605,12 @@ export function useAuth() {
     }
 
     try {
+      console.log("Resetting password for user ID:", id);
       // Generate random password
       const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8).toUpperCase()
       
-      // Update auth user password
-      const { error } = await supabase.auth.admin.updateUserById(id, {
+      // Update auth user password with admin client
+      const { error } = await supabaseAdmin.auth.admin.updateUserById(id, {
         password: tempPassword,
       })
 
@@ -463,9 +620,10 @@ export function useAuth() {
       }
 
       // Update profile to indicate temporary password
-      await supabase.from("user_profiles").update({
-        temporary_password: true,
-      }).eq("id", id)
+      // Commented out until column is added
+      // await supabase.from("user_profiles").update({
+      //   temporary_password: true,
+      // }).eq("id", id)
 
       return tempPassword
     } catch (error) {

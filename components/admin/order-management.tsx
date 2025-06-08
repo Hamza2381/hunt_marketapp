@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Search, Eye, Package, Truck, Loader2, AlertTriangle } from "lucide-react"
+import { Search, Eye, Package, Truck, Loader2, AlertTriangle, RefreshCw, CheckCircle, XCircle } from "lucide-react"
 import { supabase } from "@/lib/supabase-client"
 import { useToast } from "@/hooks/use-toast"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -29,60 +29,47 @@ export function OrderManagement() {
   const [isViewOrderOpen, setIsViewOrderOpen] = useState(false)
   const { toast } = useToast()
   
-  useEffect(() => {
-    const fetchOrders = async () => {
-      setIsLoading(true)
-      setError(null)
-      try {
-        // Fetch orders with user profiles
-        const { data: ordersData, error: ordersError } = await supabase
-          .from('orders')
-          .select('*, user_id')
-          .order('created_at', { ascending: false })
-        
-        if (ordersError) throw ordersError
-        
-        // Get user profile data for each order
-        const ordersWithProfiles = await Promise.all(ordersData.map(async (order) => {
-          // Get user profile
-          const { data: userData, error: userError } = await supabase
-            .from('user_profiles')
-            .select('*')
-            .eq('id', order.user_id)
-            .single()
-          
-          if (userError) console.error('Error fetching user for order:', userError)
-          
-          // Get order items
-          const { data: orderItems, error: itemsError } = await supabase
-            .from('order_items')
-            .select('*')
-            .eq('order_id', order.id)
-          
-          if (itemsError) console.error('Error fetching order items:', itemsError)
-          
-          return {
-            ...order,
-            user_profile: userData || null,
-            order_items: orderItems || [],
-            items_count: orderItems?.length || 0
-          }
-        }))
-        
-        setOrders(ordersWithProfiles)
-      } catch (err: any) {
-        console.error('Error fetching orders:', err.message)
-        setError('Failed to load orders. Please try again.')
-        toast({
-          title: 'Error',
-          description: 'Failed to load orders data.',
-          variant: 'destructive',
-        })
-      } finally {
-        setIsLoading(false)
-      }
+  // Fetch orders function to be reused
+  const fetchOrders = async () => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      // Fetch orders with joins for user profiles and order items in a single query
+      const { data: ordersData, error: ordersError } = await supabase
+        .from('orders')
+        .select(`
+          *,
+          user_profiles:user_id (*),
+          order_items(*, products:product_id(*))
+        `)
+        .order('created_at', { ascending: false })
+      
+      if (ordersError) throw ordersError
+      
+      // Process the results
+      const processedOrders = ordersData.map(order => ({
+        ...order,
+        user_profile: order.user_profiles,
+        items_count: order.order_items?.length || 0
+      }))
+      
+      console.log('Orders fetched:', processedOrders.length, processedOrders)
+      setOrders(processedOrders)
+    } catch (err: any) {
+      console.error('Error fetching orders:', err.message)
+      setError('Failed to load orders. Please try again.')
+      toast({
+        title: 'Error',
+        description: 'Failed to load orders data.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsLoading(false)
     }
-    
+  }
+  
+  // Initial data fetch
+  useEffect(() => {
     fetchOrders()
   }, [])
 
@@ -136,6 +123,7 @@ export function OrderManagement() {
   
   const handleUpdateStatus = async (orderId: number, newStatus: string) => {
     try {
+      console.log(`Updating order ${orderId} status to ${newStatus}`);
       const { error } = await supabase
         .from('orders')
         .update({ status: newStatus, updated_at: new Date().toISOString() })
@@ -143,10 +131,8 @@ export function OrderManagement() {
       
       if (error) throw error
       
-      // Update local state
-      setOrders(orders.map(order => 
-        order.id === orderId ? { ...order, status: newStatus } : order
-      ))
+      // Refresh orders list after update
+      await fetchOrders();
       
       toast({
         title: 'Order Updated',
@@ -196,27 +182,27 @@ export function OrderManagement() {
               <SelectItem value="cancelled">Cancelled</SelectItem>
             </SelectContent>
           </Select>
+          <Button variant="outline" onClick={fetchOrders} title="Refresh orders">
+            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
         </div>
 
-        {isLoading ? (
-          <div className="py-8 text-center">
-            <Loader2 className="h-8 w-8 animate-spin mx-auto" />
-            <p className="text-sm text-gray-500 mt-2">Loading orders...</p>
+        {isLoading && orders.length === 0 ? (
+          <div className="py-10 text-center">
+            <RefreshCw className="h-8 w-8 mx-auto animate-spin text-gray-400" />
+            <p className="mt-4 text-gray-500">Loading orders...</p>
           </div>
         ) : error ? (
           <div className="py-8 text-center">
             <AlertTriangle className="h-8 w-8 text-red-500 mx-auto" />
             <p className="text-sm text-red-500 mt-2">{error}</p>
-            <Button variant="outline" size="sm" className="mt-4" onClick={() => window.location.reload()}>
+            <Button variant="outline" size="sm" className="mt-4" onClick={fetchOrders}>
               Try Again
             </Button>
           </div>
         ) : filteredOrders.length === 0 ? (
-          <div className="py-8 text-center border rounded-md">
-            <Package className="h-8 w-8 text-gray-400 mx-auto" />
-            <p className="text-sm text-gray-500 mt-2">
-              {searchTerm || statusFilter !== "all" ? "No orders match your filters" : "No orders available"}
-            </p>
+          <div className="py-10 text-center">
+            <p className="text-gray-500">No orders found{searchTerm ? ` matching "${searchTerm}"` : ""}.</p>
             {(searchTerm || statusFilter !== "all") && (
               <Button variant="outline" size="sm" className="mt-4" onClick={() => {
                 setSearchTerm("")
@@ -227,6 +213,7 @@ export function OrderManagement() {
             )}
           </div>
         ) : (
+          <div className="rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -297,6 +284,7 @@ export function OrderManagement() {
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardContent>
       

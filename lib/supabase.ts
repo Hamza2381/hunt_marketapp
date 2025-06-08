@@ -23,6 +23,8 @@ export interface UserProfile {
   address_zip?: string
   created_at: string
   updated_at: string
+  temporary_password?: boolean
+  last_login?: string
 }
 
 export interface Product {
