@@ -13,6 +13,7 @@ import { Building2, User, Eye, EyeOff, AlertCircle } from "lucide-react"
 import { useAuth } from "@/hooks/use-auth"
 import { useToast } from "@/hooks/use-toast"
 import Link from "next/link"
+import Image from "next/image"
 
 export default function LoginPage() {
   const [email, setEmail] = useState("")
@@ -103,7 +104,15 @@ export default function LoginPage() {
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
           <div className="flex justify-center">
-            <Building2 className="h-12 w-12 text-green-600" />
+            <div className="relative h-14 w-14 overflow-hidden rounded-md transition-transform duration-300">
+              <Image 
+                src="/marketlogo.jpeg" 
+                alt="BizMart Logo" 
+                fill 
+                sizes="56px"
+                className="object-contain"
+              />
+            </div>
           </div>
           <h2 className="mt-6 text-3xl font-bold text-gray-900">Sign in to BizMart</h2>
           <p className="mt-2 text-sm text-gray-600">
