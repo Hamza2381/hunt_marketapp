@@ -37,6 +37,7 @@ export interface Product {
   stock_quantity: number
   status: "active" | "inactive" | "out_of_stock"
   image_url?: string
+  is_featured?: boolean
   created_at: string
   updated_at: string
 }

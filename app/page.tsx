@@ -19,7 +19,7 @@ export default function HomePage() {
             </div>
           }
         >
-          <ProductGrid />
+          <ProductGrid onlyFeatured={true} />
         </Suspense>
       </div>
     </div>

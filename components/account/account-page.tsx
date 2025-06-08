@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -33,6 +33,7 @@ import {
 } from "lucide-react"
 import { useAuth } from "@/hooks/use-auth"
 import { useToast } from "@/hooks/use-toast"
+import { supabase } from "@/lib/supabase-client"
 
 // Mock order data - in real app this would come from API
 const mockOrders = [
@@ -93,18 +94,42 @@ export function AccountPage() {
   const [orderFilter, setOrderFilter] = useState("all")
   const [invoiceFilter, setInvoiceFilter] = useState("all")
   const [searchTerm, setSearchTerm] = useState("")
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: ""
+  })
+  const [passwordError, setPasswordError] = useState("")
+  const [isPasswordChanging, setIsPasswordChanging] = useState(false)
   const [editForm, setEditForm] = useState({
-    name: user?.name || "",
-    email: user?.email || "",
-    phone: user?.phone || "",
-    company: user?.company || "",
+    name: "",
+    email: "",
+    phone: "",
+    company: "",
     address: {
-      street: user?.address?.street || "",
-      city: user?.address?.city || "",
-      state: user?.address?.state || "",
-      zipCode: user?.address?.zipCode || "",
+      street: "",
+      city: "",
+      state: "",
+      zipCode: "",
     },
   })
+  // Update form data when user data changes or when edit mode is enabled
+  useEffect(() => {
+    if (user && (isEditing || !editForm.name)) {
+      setEditForm({
+        name: user.name || "",
+        email: user.email || "",
+        phone: user.phone || "",
+        company: user.company || "",
+        address: {
+          street: user.address?.street || "",
+          city: user.address?.city || "",
+          state: user.address?.state || "",
+          zipCode: user.address?.zipCode || "",
+        },
+      });
+    }
+  }, [user, isEditing]);
 
   if (!user) {
     return (
@@ -115,7 +140,7 @@ export function AccountPage() {
           </div>
         </div>
       </div>
-    )
+    );
   }
 
   // Filter orders based on user email
@@ -137,19 +162,49 @@ export function AccountPage() {
   })
 
   const handleSave = () => {
-    const updatedUser = {
-      ...user,
-      ...editForm,
-      company: user.accountType === "business" ? editForm.company : user.company,
+    // Validate required fields
+    if (!editForm.name.trim()) {
+      toast({
+        title: "Error",
+        description: "Name is required.",
+        variant: "destructive"
+      });
+      return;
     }
 
-    updateUser(updatedUser)
-    setIsEditing(false)
+    if (!editForm.email.trim()) {
+      toast({
+        title: "Error",
+        description: "Email is required.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    // Create a clean update object
+    const updatedUser = {
+      ...user,
+      name: editForm.name.trim(),
+      email: editForm.email.trim(),
+      phone: editForm.phone.trim(),
+      company: user.accountType === "business" ? editForm.company.trim() : user.company,
+      address: {
+        street: editForm.address.street.trim(),
+        city: editForm.address.city.trim(),
+        state: editForm.address.state.trim(),
+        zipCode: editForm.address.zipCode.trim(),
+      },
+    };
+
+   
+
+    updateUser(updatedUser);
+    setIsEditing(false);
 
     toast({
       title: "Account Updated",
       description: "Your account information has been successfully updated.",
-    })
+    });
   }
 
   const handleCancel = () => {
@@ -162,6 +217,75 @@ export function AccountPage() {
     })
     setIsEditing(false)
   }
+
+  const handlePasswordChange = async () => {
+    // Reset error state
+    setPasswordError("");
+    
+    // Validate inputs
+    if (!passwordForm.currentPassword) {
+      setPasswordError("Current password is required");
+      return;
+    }
+    
+    if (!passwordForm.newPassword) {
+      setPasswordError("New password is required");
+      return;
+    }
+    
+    if (passwordForm.newPassword.length < 6) {
+      setPasswordError("New password must be at least 6 characters long");
+      return;
+    }
+    
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError("New passwords do not match");
+      return;
+    }
+    
+    // Proceed with password change
+    setIsPasswordChanging(true);
+    
+    try {
+      // First verify the current password by attempting to sign in
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email: user.email,
+        password: passwordForm.currentPassword,
+      });
+      
+      if (signInError) {
+        setPasswordError("Current password is incorrect");
+        setIsPasswordChanging(false);
+        return;
+      }
+      
+      // Use the supabase client directly to update the password
+      const { error } = await supabase.auth.updateUser({
+        password: passwordForm.newPassword,
+      });
+      
+      if (error) {
+        setPasswordError(error.message || "Failed to update password");
+      } else {
+        toast({
+          title: "Password Updated",
+          description: "Your password has been successfully changed.",
+        });
+        
+        // Reset form
+        setPasswordForm({
+          currentPassword: "",
+          newPassword: "",
+          confirmPassword: ""
+        });
+      }
+    } catch (error) {
+      console.error("Error changing password:", error);
+      setPasswordError("An unexpected error occurred");
+    } finally {
+      setIsPasswordChanging(false);
+    }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -214,29 +338,27 @@ export function AccountPage() {
           <p className="text-gray-600 mt-2">Manage your account settings and view order history</p>
         </div>
 
-        <div className="flex justify-between items-center mb-6">
-          <Tabs defaultValue="profile" className="space-y-6">
+        <Tabs defaultValue="profile" className="w-full">
+          <div className="flex justify-between items-center mb-6">
             <TabsList>
               <TabsTrigger value="profile">Profile</TabsTrigger>
-              <TabsTrigger value="orders">Orders</TabsTrigger>
-              <TabsTrigger value="invoices">Invoices</TabsTrigger>
+              {/* <TabsTrigger value="orders">Orders</TabsTrigger> */}
+              {/* <TabsTrigger value="invoices">Invoices</TabsTrigger> */}
               <TabsTrigger value="credit">Credit Line</TabsTrigger>
               <TabsTrigger value="security">Security</TabsTrigger>
             </TabsList>
-          </Tabs>
-          <Button variant="outline" onClick={() => {
-            logout()
-            toast({
-              title: "Logged out",
-              description: "You have been successfully logged out.",
-            })
-            router.push('/login')
-          }}>
-            <LogOut className="h-4 w-4 mr-2" />
-            Logout
-          </Button>
-        </div>
-        <Tabs>
+            <Button variant="outline" onClick={() => {
+              logout()
+              toast({
+                title: "Logged out",
+                description: "You have been successfully logged out.",
+              })
+              router.push('/login')
+            }}>
+              <LogOut className="h-4 w-4 mr-2" />
+              Logout
+            </Button>
+          </div>
           <TabsContent value="profile">
             <Card>
               <CardHeader>
@@ -748,30 +870,50 @@ export function AccountPage() {
                   <div className="space-y-4 max-w-md">
                     <div>
                       <Label htmlFor="current-password">Current Password</Label>
-                      <Input id="current-password" type="password" />
+                      <Input 
+                        id="current-password" 
+                        type="password" 
+                        value={passwordForm.currentPassword}
+                        onChange={(e) => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })}
+                      />
                     </div>
                     <div>
                       <Label htmlFor="new-password">New Password</Label>
-                      <Input id="new-password" type="password" />
+                      <Input 
+                        id="new-password" 
+                        type="password" 
+                        value={passwordForm.newPassword}
+                        onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                      />
                     </div>
                     <div>
                       <Label htmlFor="confirm-password">Confirm New Password</Label>
-                      <Input id="confirm-password" type="password" />
+                      <Input 
+                        id="confirm-password" 
+                        type="password" 
+                        value={passwordForm.confirmPassword}
+                        onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                      />
                     </div>
-                    <Button>Update Password</Button>
+                    {passwordError && (
+                      <div className="text-sm text-red-600">{passwordError}</div>
+                    )}
+                    <Button onClick={handlePasswordChange} disabled={isPasswordChanging}>
+                      {isPasswordChanging ? "Updating..." : "Update Password"}
+                    </Button>
                   </div>
                 </div>
 
                 <Separator />
 
                 <div>
-                  <h4 className="font-medium mb-4">Two-Factor Authentication</h4>
+                  {/* <h4 className="font-medium mb-4">Two-Factor Authentication</h4>
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm text-gray-600">Add an extra layer of security to your account</p>
                     </div>
                     <Button variant="outline">Enable 2FA</Button>
-                  </div>
+                  </div> */}
                 </div>
 
                 <Separator />

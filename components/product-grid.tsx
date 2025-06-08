@@ -22,9 +22,10 @@ interface ProductGridProps {
   searchQuery?: string;
   categoryFilter?: string;
   sortOrder?: string;
+  onlyFeatured?: boolean;
 }
 
-export function ProductGrid({ searchQuery = '', categoryFilter = '', sortOrder = 'newest' }: ProductGridProps) {
+export function ProductGrid({ searchQuery = '', categoryFilter = '', sortOrder = 'newest', onlyFeatured = false }: ProductGridProps) {
   const { addItem } = useCart()
   const { isAuthenticated } = useAuth()
   const { toast } = useToast()
@@ -50,10 +51,38 @@ export function ProductGrid({ searchQuery = '', categoryFilter = '', sortOrder =
         setCategories(categoriesData || [])
         
         // Fetch active products - don't limit on the products page
-        const { data: productsData, error: productsError } = await supabase
+        let query = supabase
           .from('products')
           .select('*')
           .eq('status', 'active')
+        
+        // Check if the column exists by fetching just one product first
+        if (onlyFeatured) {
+          try {
+            // Try to execute a query with is_featured
+            const testQuery = await supabase
+              .from('products')
+              .select('id')
+              .eq('is_featured', true)
+              .limit(1)
+            
+            // If there's no error, use the filter
+            if (!testQuery.error) {
+              query = query.eq('is_featured', true)
+            } else {
+              console.warn('is_featured column not available:', testQuery.error.message)
+              // We'll fall back to showing all products
+              // For demo purposes, let's limit to first 4 products
+              query = query.limit(4)
+            }
+          } catch (err) {
+            console.warn('Error checking for is_featured column, showing all products')
+            // For demo purposes, let's limit to first 4 products on the home page
+            query = query.limit(4)
+          }
+        }
+        
+        const { data: productsData, error: productsError } = await query
         
         if (productsError) throw productsError
         
@@ -80,7 +109,7 @@ export function ProductGrid({ searchQuery = '', categoryFilter = '', sortOrder =
     }
     
     fetchProducts()
-  }, [])
+  }, [onlyFeatured])
   
   // Apply filters and sorting whenever filters or products change
   useEffect(() => {
@@ -225,7 +254,12 @@ export function ProductGrid({ searchQuery = '', categoryFilter = '', sortOrder =
       {showTitle && (
         <div className="text-center">
           <h2 className="text-3xl font-bold mb-4">Featured Products</h2>
-          <p className="text-gray-600">Discover our most popular business and office supplies</p>
+          <p className="text-gray-600 mb-2">Discover our most popular business and office supplies</p>
+          {onlyFeatured && (
+            <p className="text-xs text-gray-500">
+              <strong>Note for Admin:</strong> Please run the migration script in scripts/add-featured-products.sql to enable proper featured products filtering.
+            </p>
+          )}
         </div>
       )}
       

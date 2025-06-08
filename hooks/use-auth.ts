@@ -94,7 +94,7 @@ export function useAuth() {
   }, [isLoading, user, isAuthenticatedRef]);
 
   useEffect(() => {
-   console.log('in effect')
+   // Initialize auth
     // Get initial session
     const getInitialSession = async () => {
       // Check if we have minimal user data in session storage to avoid loading state flicker
@@ -130,7 +130,7 @@ export function useAuth() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log("Auth state changed:", event, session?.user?.email)
+      // Auth state changed handler
 
       if (session?.user) {
         await loadUserProfile(session.user)
@@ -155,39 +155,39 @@ export function useAuth() {
       
       let profile = fetchedProfile
 
-      if (error) {
-        console.error("Error loading user profile:", error)
+      // if (error) {
+      //   console.error("Error loading user profile:", error)
 
-        // If profile doesn't exist, create it
-        if (error.code === "PGRST116") {
-          console.log("Creating user profile...")
-          const { data: newProfile, error: createError } = await supabase
-            .from("user_profiles")
-            .insert({
-              id: supabaseUser.id,
-              name: supabaseUser.user_metadata?.name || supabaseUser.email?.split("@")[0] || "User",
-              email: supabaseUser.email!,
-              account_type: supabaseUser.user_metadata?.account_type || "personal",
-              company_name: supabaseUser.user_metadata?.company_name,
-              is_admin: false,
-              credit_limit: 0,
-              credit_used: 0,
-            })
-            .select()
-            .single()
+      //   // If profile doesn't exist, create it
+      //   if (error.code === "PGRST116") {
+      //     console.log("Creating user profile...")
+      //     const { data: newProfile, error: createError } = await supabase
+      //       .from("user_profiles")
+      //       .insert({
+      //         id: supabaseUser.id,
+      //         name: supabaseUser.user_metadata?.name || supabaseUser.email?.split("@")[0] || "User",
+      //         email: supabaseUser.email!,
+      //         account_type: supabaseUser.user_metadata?.account_type || "personal",
+      //         company_name: supabaseUser.user_metadata?.company_name,
+      //         is_admin: false,
+      //         credit_limit: 0,
+      //         credit_used: 0,
+      //       })
+      //       .select()
+      //       .single()
 
-          if (createError) {
-            console.error("Error creating user profile:", createError)
-            setIsLoading(false)
-            return
-          }
+      //     if (createError) {
+      //       console.error("Error creating user profile:", createError)
+      //       setIsLoading(false)
+      //       return
+      //     }
 
-          profile = newProfile
-        } else {
-          setIsLoading(false)
-          return
-        }
-      }
+      //     profile = newProfile
+      //   } else {
+      //     setIsLoading(false)
+      //     return
+      //   }
+      // }
 
       if (profile) {
         const user: User = {
@@ -212,7 +212,7 @@ export function useAuth() {
           createdAt: profile.created_at,
         }
 
-        console.log("User profile loaded:", user.email)
+        // User profile successfully loaded
         setUser(user)
         
         // Cache minimal user data for navigation state preservation
@@ -306,7 +306,48 @@ export function useAuth() {
     if (!user) return { success: false, error: "Not authenticated" }
 
     try {
-      const { error } = await supabase.from("user_profiles").update(updates).eq("id", user.id)
+         const dbUpdates: any = {}
+      if (updates.name !== undefined) dbUpdates.name = updates.name
+      if (updates.email !== undefined) dbUpdates.email = updates.email
+      if (updates.accountType !== undefined) dbUpdates.account_type = updates.accountType
+      if (updates.company !== undefined) dbUpdates.company_name = updates.company
+      if (updates.phone !== undefined) dbUpdates.phone = updates.phone
+      
+      // Special handling for credit fields to ensure proper decimal formatting
+      if (updates.creditLimit !== undefined) {
+        // Force number and format to 2 decimal places for DB
+        const creditLimit = Number(updates.creditLimit);
+        if (!isNaN(creditLimit)) {
+          dbUpdates.credit_limit = creditLimit;
+          console.log("Credit Update - Setting credit_limit to:", dbUpdates.credit_limit);
+        }
+      }
+      
+      if (updates.creditUsed !== undefined) {
+        // Force number and format to 2 decimal places for DB
+        const creditUsed = Number(updates.creditUsed);
+        if (!isNaN(creditUsed)) {
+          dbUpdates.credit_used = creditUsed;
+          console.log("Credit Update - Setting credit_used to:", dbUpdates.credit_used);
+        }
+      }
+      
+      // Handle address
+      if (updates.address) {
+        if (updates.address.street !== undefined) dbUpdates.address_street = updates.address.street
+        if (updates.address.city !== undefined) dbUpdates.address_city = updates.address.city
+        if (updates.address.state !== undefined) dbUpdates.address_state = updates.address.state
+        if (updates.address.zipCode !== undefined) dbUpdates.address_zip = updates.address.zipCode
+      }
+
+      console.log("Credit Update - Final DB updates:", dbUpdates);
+      
+      // Make sure we have something to update
+      if (Object.keys(dbUpdates).length === 0) {
+        console.error("Credit Update - No valid fields to update");
+        return { success: false, error: "No valid fields to update" };
+      }
+      const { error } = await supabase.from("user_profiles").update(dbUpdates).eq("id", user.id)
 
       if (error) {
         return { success: false, error: error.message }
@@ -516,10 +557,11 @@ export function useAuth() {
 
       // Create profile
       if (data.user) {
-        const { error: profileError } = await supabase.from("user_profiles").insert({
-          id: data.user.id,
+      
+        const { error } = await supabase.from("user_profiles").update({
+    
           name: userData.name,
-          email: userData.email,
+          // email: userData.email,
           account_type: userData.accountType,
           company_name: userData.company,
           phone: userData.phone,
@@ -532,11 +574,11 @@ export function useAuth() {
           address_zip: userData.address?.zipCode,
           // temporary_password field will be added later
           // temporary_password: true,
-        })
+        }).eq("id", data.user.id);
 
-        if (profileError) {
-          console.error("Error creating profile:", profileError)
-          return { success: false, error: profileError.message }
+        if (error) {
+          console.error("Error creating profile:", error)
+          return { success: false, error: error.message }
         }
 
         return { 

@@ -12,6 +12,7 @@ import { SessionStateProvider } from "@/components/session-state-provider"
 import { DisableBeforeUnload } from "@/components/disable-beforeunload"
 import { CartProvider } from "@/context/cart-context"
 import { useEffect, useState } from "react"
+import CustomCursor from "@/components/ui/cursor/cursor"
 
 const inter = Inter({ subsets: ["latin"] })
 
