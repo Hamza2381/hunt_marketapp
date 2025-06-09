@@ -1,15 +1,15 @@
+import { Suspense } from "react"
 import { ProductDetailPage } from "@/components/products/product-detail-page"
 
-// Define the page component using an async function to handle Promise params
+// Define the page component as async
 export default async function ProductPage({ params }) {
-  // Await the params if they're a Promise, otherwise use them directly
-  const resolvedParams = params instanceof Promise ? await params : params;
-  const id = resolvedParams.id;
+  // Get the ID and await it
+  const data = await params;
+  const id = data.id
   
-  return <ProductDetailPage productId={id} />;
-}
-
-// This helps Next.js with static generation
-export async function generateStaticParams() {
-  return [];
+  return (
+    <Suspense fallback={<div>Loading product...</div>}>
+      <ProductDetailPage productId={id} />
+    </Suspense>
+  );
 }

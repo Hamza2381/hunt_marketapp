@@ -7,273 +7,118 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Star, ShoppingCart, Heart, Share2, Truck, Shield, RotateCcw } from "lucide-react"
+import { Star, ShoppingCart, Heart, Share2, Truck, Shield, RotateCcw, Loader2, FileText } from "lucide-react"
 import { useCart } from "@/hooks/use-cart"
 import { useAuth } from "@/hooks/use-auth"
 import { useToast } from "@/hooks/use-toast"
 import Link from "next/link"
+import { supabase } from "@/lib/supabase-client"
+import type { Product, Category } from "@/lib/supabase"
 
-// Mock product data
-const products = [
-  {
-    id: 1,
-    name: "Premium Copy Paper - 500 Sheets",
-    sku: "PP-500-001",
-    price: 12.99,
-    originalPrice: 15.99,
-    rating: 4.5,
-    reviews: 234,
-    category: "Paper",
-    inStock: true,
-    stockQuantity: 150,
-    images: [
-      "/placeholder.svg?height=400&width=400",
-      "/placeholder.svg?height=400&width=400",
-      "/placeholder.svg?height=400&width=400",
-    ],
-    description:
-      "High-quality white copy paper, 20lb weight, perfect for everyday printing and copying needs. Compatible with all major printer brands.",
-    features: [
-      "20lb weight for professional documents",
-      "99.99% jam-free guarantee",
-      "Acid-free for long-term storage",
-      "Compatible with inkjet and laser printers",
-      "Made from sustainable forests",
-    ],
-    specifications: {
-      "Paper Weight": "20 lb",
-      "Sheet Size": '8.5" x 11"',
-      "Sheets per Ream": "500",
-      Brightness: "92",
-      Opacity: "94%",
-      Caliper: "4.0 mil",
-    },
-  },
-  {
-    id: 2,
-    name: "Black Ink Cartridge - HP Compatible",
-    sku: "INK-HP-001",
-    price: 24.99,
-    originalPrice: 39.99,
-    rating: 4.2,
-    reviews: 156,
-    category: "Ink & Toner",
-    inStock: true,
-    stockQuantity: 75,
-    images: ["/placeholder.svg?height=400&width=400"],
-    description: "Compatible black ink cartridge for HP printers, high yield with professional quality output.",
-    features: [
-      "High yield - up to 600 pages",
-      "Professional quality output",
-      "Easy installation",
-      "100% compatible with HP printers",
-      "1-year warranty included",
-    ],
-    specifications: {
-      "Page Yield": "600 pages",
-      "Ink Type": "Pigment-based",
-      "Compatible Models": "HP 64, 65, 67 series",
-      Color: "Black",
-      Warranty: "1 year",
-    },
-  },
-  {
-    id: 3,
-    name: "Wireless Mouse - Ergonomic Design",
-    sku: "TECH-MS-001",
-    price: 19.99,
-    originalPrice: 29.99,
-    rating: 4.7,
-    reviews: 89,
-    category: "Technology",
-    inStock: false,
-    stockQuantity: 0,
-    images: ["/placeholder.svg?height=400&width=400"],
-    description: "Comfortable wireless mouse with ergonomic design for all-day use.",
-    features: [
-      "Wireless connectivity up to 33ft",
-      "Ergonomic design reduces wrist strain",
-      "18-month battery life",
-      "Compatible with Windows, Mac, and Linux",
-      "Plug-and-play setup with included USB receiver",
-    ],
-    specifications: {
-      Connectivity: "2.4GHz wireless",
-      Battery: "1 AA (included)",
-      DPI: "1200",
-      Buttons: "3",
-      Warranty: "2 years",
-    },
-  },
-  {
-    id: 4,
-    name: "Coffee K-Cups - Variety Pack",
-    sku: "COFFEE-001",
-    price: 32.99,
-    originalPrice: 45.99,
-    rating: 4.8,
-    reviews: 312,
-    category: "Coffee & Snacks",
-    inStock: true,
-    stockQuantity: 120,
-    images: ["/placeholder.svg?height=400&width=400"],
-    description: "Assorted coffee flavors in convenient K-Cup pods, compatible with all Keurig brewers.",
-    features: [
-      "40-count variety pack",
-      "Includes 4 popular flavors",
-      "100% Arabica coffee",
-      "Compatible with all Keurig K-Cup brewers",
-      "Individually sealed for freshness",
-    ],
-    specifications: {
-      Count: "40 pods",
-      Flavors: "Original, Dark Roast, French Vanilla, Hazelnut",
-      Caffeine: "Regular",
-      Compatibility: "All Keurig K-Cup brewers",
-      "Shelf Life": "12 months",
-    },
-  },
-  {
-    id: 5,
-    name: "Sticky Notes - Assorted Colors",
-    sku: "OFFICE-001",
-    price: 8.99,
-    originalPrice: 12.99,
-    rating: 4.3,
-    reviews: 67,
-    category: "Office Supplies",
-    inStock: true,
-    stockQuantity: 200,
-    images: ["/placeholder.svg?height=400&width=400"],
-    description: "Colorful sticky notes perfect for reminders, notes, and organization.",
-    features: [
-      "12-pack of 100 sheets each",
-      "5 assorted bright colors",
-      "3x3 inch size",
-      "Super sticky adhesive",
-      "Recyclable paper",
-    ],
-    specifications: {
-      Size: "3x3 inches",
-      Sheets: "100 per pad",
-      Pads: "12",
-      Colors: "Yellow, Blue, Green, Pink, Orange",
-      Material: "Recycled paper",
-    },
-  },
-  {
-    id: 6,
-    name: "All-Purpose Cleaner - 32oz",
-    sku: "CLEAN-001",
-    price: 6.99,
-    originalPrice: 9.99,
-    rating: 4.1,
-    reviews: 45,
-    category: "Cleaning",
-    inStock: true,
-    stockQuantity: 85,
-    images: ["/placeholder.svg?height=400&width=400"],
-    description: "Powerful all-purpose cleaner for surfaces throughout your office.",
-    features: [
-      "Kills 99.9% of bacteria",
-      "Safe for most surfaces",
-      "Pleasant lemon scent",
-      "No harsh chemicals",
-      "Ready to use - no dilution needed",
-    ],
-    specifications: {
-      Size: "32 oz",
-      Scent: "Lemon",
-      Form: "Spray",
-      "Surface Types": "Counters, glass, stainless steel, plastic",
-      Ingredients: "Plant-based surfactants, essential oils",
-    },
-  },
-  {
-    id: 7,
-    name: "Laser Printer Paper - Ream",
-    sku: "PAPER-002",
-    price: 15.99,
-    originalPrice: 18.99,
-    rating: 4.3,
-    reviews: 156,
-    category: "Paper",
-    inStock: true,
-    stockQuantity: 75,
-    images: ["/placeholder.svg?height=400&width=400"],
-    description: "Premium laser printer paper for sharp, professional documents.",
-    features: [
-      "24lb weight for premium feel",
-      "98 brightness for vivid printing",
-      "Acid-free for archival quality",
-      "Optimized for laser printers",
-      "500 sheets per ream",
-    ],
-    specifications: {
-      "Paper Weight": "24 lb",
-      "Sheet Size": '8.5" x 11"',
-      "Sheets per Ream": "500",
-      Brightness: "98",
-      Opacity: "96%",
-      Caliper: "4.5 mil",
-    },
-  },
-  {
-    id: 8,
-    name: "Color Ink Cartridge Set",
-    sku: "INK-COLOR-001",
-    price: 39.99,
-    originalPrice: 59.99,
-    rating: 4.4,
-    reviews: 203,
-    category: "Ink & Toner",
-    inStock: true,
-    stockQuantity: 50,
-    images: ["/placeholder.svg?height=400&width=400"],
-    description: "Complete set of color ink cartridges for vibrant photo and document printing.",
-    features: [
-      "4-pack includes Cyan, Magenta, Yellow, and Black",
-      "High capacity - up to 450 pages per cartridge",
-      "Fade-resistant for long-lasting prints",
-      "Compatible with major printer brands",
-      "Easy installation with chip technology",
-    ],
-    specifications: {
-      Colors: "Cyan, Magenta, Yellow, Black",
-      "Page Yield": "450 pages per color",
-      "Ink Type": "Dye-based",
-      "Compatible Models": "HP, Canon, Epson (check compatibility)",
-      Warranty: "1 year",
-    },
-  },
-]
+interface ExtendedProduct extends Product {
+  category_name?: string;
+  specifications?: Record<string, string>;
+  images?: string[];
+}
 
 interface ProductDetailPageProps {
   productId: string
 }
 
 export function ProductDetailPage({ productId }: ProductDetailPageProps) {
-  const [product, setProduct] = useState<any>(null)
+  const [product, setProduct] = useState<ExtendedProduct | null>(null)
   const [selectedImage, setSelectedImage] = useState(0)
   const [quantity, setQuantity] = useState(1)
   const [isWishlisted, setIsWishlisted] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const { addItem } = useCart()
   const { isAuthenticated } = useAuth()
   const { toast } = useToast()
 
   useEffect(() => {
-    // Find product by ID
-    const foundProduct = products.find((p) => p.id === Number.parseInt(productId))
-    setProduct(foundProduct)
+    const fetchProduct = async () => {
+      setIsLoading(true)
+      setError(null)
+      
+      try {
+        // Fetch product data
+        const { data: productData, error: productError } = await supabase
+          .from('products')
+          .select('*')
+          .eq('id', productId)
+          .single()
+        
+        if (productError) throw productError
+        
+        if (!productData) {
+          setError('Product not found')
+          setIsLoading(false)
+          return
+        }
+        
+        // Fetch category name
+        const { data: categoryData } = await supabase
+          .from('categories')
+          .select('name')
+          .eq('id', productData.category_id)
+          .single()
+        
+        // Transform product data with additional info
+        const enhancedProduct: ExtendedProduct = {
+          ...productData,
+          category_name: categoryData?.name || 'Uncategorized',
+          
+          // Only include essential specifications from the database
+          specifications: {
+            'SKU': productData.sku,
+            'Category': categoryData?.name || 'Uncategorized',
+            'Stock': productData.stock_quantity.toString(),
+            'Status': productData.status.charAt(0).toUpperCase() + productData.status.slice(1)
+          }
+        }
+        
+        // Handle product images - if it's a single image string, convert to array
+        if (typeof enhancedProduct.image_url === 'string' && enhancedProduct.image_url) {
+          enhancedProduct.images = [enhancedProduct.image_url]
+        } else {
+          enhancedProduct.images = ["/placeholder.svg?height=400&width=400"]
+        }
+        
+        setProduct(enhancedProduct)
+      } catch (err: any) {
+        console.error('Error fetching product details:', err.message)
+        setError('Failed to load product details. Please try again.')
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    
+    if (productId) {
+      fetchProduct()
+    }
   }, [productId])
 
-  if (!product) {
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-8">
+        <div className="container mx-auto px-4">
+          <div className="text-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto" />
+            <p className="text-gray-600 mt-4">Loading product details...</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+  
+  if (error || !product) {
     return (
       <div className="min-h-screen bg-gray-50 py-8">
         <div className="container mx-auto px-4">
           <div className="text-center">
             <h1 className="text-2xl font-bold">Product not found</h1>
-            <p className="text-gray-600 mt-2">The product you're looking for doesn't exist.</p>
+            <p className="text-gray-600 mt-2">{error || "The product you're looking for doesn't exist."}</p>
             <Button asChild className="mt-4">
               <Link href="/">Back to Home</Link>
             </Button>
@@ -293,7 +138,7 @@ export function ProductDetailPage({ productId }: ProductDetailPageProps) {
       return
     }
 
-    if (!product.inStock) {
+    if (product.stock_quantity <= 0 || product.status === "out_of_stock") {
       toast({
         title: "Out of stock",
         description: "This item is currently out of stock.",
@@ -302,16 +147,16 @@ export function ProductDetailPage({ productId }: ProductDetailPageProps) {
       return
     }
 
-    for (let i = 0; i < quantity; i++) {
-      addItem({
-        id: product.id,
-        name: product.name,
-        sku: product.sku,
-        price: product.price,
-        image: product.images[0],
-        inStock: product.inStock,
-      })
-    }
+    // Fixed: Remove the quantity property from the addItem call
+    // The addItem function expects an object WITHOUT a quantity property
+    addItem({
+      id: product.id,
+      name: product.name,
+      sku: product.sku,
+      price: product.price,
+      image: product.images ? product.images[0] : product.image_url || "/placeholder.svg",
+      inStock: product.stock_quantity > 0 && product.status === "active",
+    })
 
     toast({
       title: "Added to cart",
@@ -339,10 +184,10 @@ export function ProductDetailPage({ productId }: ProductDetailPageProps) {
             <li>/</li>
             <li>
               <Link
-                href={`/categories/${product.category.toLowerCase().replace(/\s+/g, "-")}`}
+                href={`/categories/${product.category_name?.toLowerCase().replace(/\s+/g, "-")}`}
                 className="hover:text-blue-600"
               >
-                {product.category}
+                {product.category_name}
               </Link>
             </li>
             <li>/</li>
@@ -355,12 +200,15 @@ export function ProductDetailPage({ productId }: ProductDetailPageProps) {
           <div className="space-y-4">
             <div className="aspect-square bg-white rounded-lg overflow-hidden">
               <img
-                src={product.images[selectedImage] || "/placeholder.svg"}
+                src={product.images && product.images.length > 0 ? product.images[selectedImage] : "/placeholder.svg"}
                 alt={product.name}
                 className="w-full h-full object-cover"
+                onError={(e) => {
+                  e.currentTarget.src = "/placeholder.svg?height=400&width=400";
+                }}
               />
             </div>
-            {product.images.length > 1 && (
+            {product.images && product.images.length > 1 && (
               <div className="flex space-x-2">
                 {product.images.map((image: string, index: number) => (
                   <button
@@ -370,7 +218,14 @@ export function ProductDetailPage({ productId }: ProductDetailPageProps) {
                       selectedImage === index ? "border-blue-600" : "border-gray-200"
                     }`}
                   >
-                    <img src={image || "/placeholder.svg"} alt="" className="w-full h-full object-cover" />
+                    <img 
+                      src={image || "/placeholder.svg"} 
+                      alt="" 
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.src = "/placeholder.svg?height=100&width=100";
+                      }}
+                    />
                   </button>
                 ))}
               </div>
@@ -381,44 +236,23 @@ export function ProductDetailPage({ productId }: ProductDetailPageProps) {
           <div className="space-y-6">
             <div>
               <Badge variant="outline" className="mb-2">
-                {product.category}
+                {product.category_name}
               </Badge>
               <h1 className="text-3xl font-bold">{product.name}</h1>
               <p className="text-gray-600">SKU: {product.sku}</p>
             </div>
 
-            {/* Rating */}
-            <div className="flex items-center space-x-2">
-              <div className="flex items-center">
-                {[...Array(5)].map((_, i) => (
-                  <Star
-                    key={i}
-                    className={`h-5 w-5 ${
-                      i < Math.floor(product.rating) ? "fill-yellow-400 text-yellow-400" : "text-gray-300"
-                    }`}
-                  />
-                ))}
-              </div>
-              <span className="text-sm text-gray-600">({product.reviews} reviews)</span>
-            </div>
-
             {/* Price */}
             <div className="flex items-center space-x-3">
-              <span className="text-3xl font-bold text-blue-600">${product.price}</span>
-              {product.originalPrice > product.price && (
-                <span className="text-xl text-gray-500 line-through">${product.originalPrice}</span>
-              )}
-              {product.originalPrice > product.price && (
-                <Badge className="bg-red-500">Save ${(product.originalPrice - product.price).toFixed(2)}</Badge>
-              )}
+              <span className="text-3xl font-bold text-blue-600">${product.price.toFixed(2)}</span>
             </div>
 
             {/* Stock Status */}
             <div className="flex items-center space-x-2">
-              {product.inStock ? (
+              {product.stock_quantity > 0 && product.status === "active" ? (
                 <>
                   <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                  <span className="text-green-600 font-medium">In Stock ({product.stockQuantity} available)</span>
+                  <span className="text-green-600 font-medium">In Stock ({product.stock_quantity} available)</span>
                 </>
               ) : (
                 <>
@@ -438,18 +272,23 @@ export function ProductDetailPage({ productId }: ProductDetailPageProps) {
                   id="quantity"
                   type="number"
                   min="1"
-                  max={product.stockQuantity}
+                  max={product.stock_quantity}
                   value={quantity}
                   onChange={(e) => setQuantity(Math.max(1, Number.parseInt(e.target.value) || 1))}
                   className="w-20"
-                  disabled={!product.inStock}
+                  disabled={product.stock_quantity <= 0 || product.status !== "active"}
                 />
               </div>
 
               <div className="flex space-x-3">
-                <Button onClick={handleAddToCart} disabled={!product.inStock} className="flex-1" size="lg">
+                <Button 
+                  onClick={handleAddToCart} 
+                  disabled={product.stock_quantity <= 0 || product.status !== "active"} 
+                  className="flex-1" 
+                  size="lg"
+                >
                   <ShoppingCart className="h-5 w-5 mr-2" />
-                  {product.inStock ? "Add to Cart" : "Out of Stock"}
+                  {product.stock_quantity > 0 && product.status === "active" ? "Add to Cart" : "Out of Stock"}
                 </Button>
                 <Button variant="outline" size="lg" onClick={() => setIsWishlisted(!isWishlisted)}>
                   <Heart className={`h-5 w-5 ${isWishlisted ? "fill-red-500 text-red-500" : ""}`} />
@@ -485,110 +324,30 @@ export function ProductDetailPage({ productId }: ProductDetailPageProps) {
         <Card>
           <CardContent className="p-6">
             <Tabs defaultValue="description">
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="description">Description</TabsTrigger>
                 <TabsTrigger value="specifications">Specifications</TabsTrigger>
-                <TabsTrigger value="reviews">Reviews ({product.reviews})</TabsTrigger>
               </TabsList>
 
               <TabsContent value="description" className="mt-6">
-                <div className="space-y-4">
+                {product.description ? (
                   <p className="text-gray-700">{product.description}</p>
-                  <div>
-                    <h4 className="font-medium mb-2">Key Features:</h4>
-                    <ul className="list-disc list-inside space-y-1 text-gray-700">
-                      {product.features.map((feature: string, index: number) => (
-                        <li key={index}>{feature}</li>
-                      ))}
-                    </ul>
+                ) : (
+                  <div className="text-center py-6 text-gray-500">
+                    <FileText className="h-12 w-12 mx-auto mb-2 text-gray-300" />
+                    <p>No description available for this product.</p>
                   </div>
-                </div>
+                )}
               </TabsContent>
 
               <TabsContent value="specifications" className="mt-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {Object.entries(product.specifications).map(([key, value]) => (
+                  {product.specifications && Object.entries(product.specifications).map(([key, value]) => (
                     <div key={key} className="flex justify-between py-2 border-b">
                       <span className="font-medium">{key}:</span>
-                      <span className="text-gray-700">{value as string}</span>
+                      <span className="text-gray-700">{value}</span>
                     </div>
                   ))}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="reviews" className="mt-6">
-                <div className="space-y-6">
-                  {/* Review Summary */}
-                  <div className="flex items-center space-x-6">
-                    <div className="text-center">
-                      <div className="text-4xl font-bold">{product.rating}</div>
-                      <div className="flex items-center justify-center">
-                        {[...Array(5)].map((_, i) => (
-                          <Star
-                            key={i}
-                            className={`h-4 w-4 ${
-                              i < Math.floor(product.rating) ? "fill-yellow-400 text-yellow-400" : "text-gray-300"
-                            }`}
-                          />
-                        ))}
-                      </div>
-                      <div className="text-sm text-gray-600">{product.reviews} reviews</div>
-                    </div>
-                    <div className="flex-1">
-                      {[5, 4, 3, 2, 1].map((stars) => (
-                        <div key={stars} className="flex items-center space-x-2">
-                          <span className="text-sm w-8">{stars}★</span>
-                          <div className="flex-1 bg-gray-200 rounded-full h-2">
-                            <div
-                              className="bg-yellow-400 h-2 rounded-full"
-                              style={{ width: `${Math.random() * 80 + 10}%` }}
-                            />
-                          </div>
-                          <span className="text-sm text-gray-600 w-8">{Math.floor(Math.random() * 50)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  {/* Sample Reviews */}
-                  <div className="space-y-4">
-                    {[
-                      {
-                        name: "John D.",
-                        rating: 5,
-                        date: "2024-01-15",
-                        comment:
-                          "Excellent quality paper. Works great with our office printers and the price is very competitive.",
-                      },
-                      {
-                        name: "Sarah M.",
-                        rating: 4,
-                        date: "2024-01-10",
-                        comment:
-                          "Good value for money. The paper quality is consistent and we haven't had any jamming issues.",
-                      },
-                    ].map((review, index) => (
-                      <div key={index} className="border-b pb-4">
-                        <div className="flex items-center space-x-2 mb-2">
-                          <span className="font-medium">{review.name}</span>
-                          <div className="flex items-center">
-                            {[...Array(5)].map((_, i) => (
-                              <Star
-                                key={i}
-                                className={`h-4 w-4 ${
-                                  i < review.rating ? "fill-yellow-400 text-yellow-400" : "text-gray-300"
-                                }`}
-                              />
-                            ))}
-                          </div>
-                          <span className="text-sm text-gray-600">{review.date}</span>
-                        </div>
-                        <p className="text-gray-700">{review.comment}</p>
-                      </div>
-                    ))}
-                  </div>
                 </div>
               </TabsContent>
             </Tabs>
