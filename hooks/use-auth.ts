@@ -40,8 +40,19 @@ export function useAuth() {
   useEffect(() => {
     if (user) {
       isAuthenticatedRef.current = true
+    } else {
+      // Only update the ref if we're sure user is null AND we're not in a loading state
+      // This prevents flickering during tab switches
+      if (!isLoading && typeof window !== 'undefined') {
+        // Check if this is a genuine logout vs a page refresh/tab switch
+        const isFullUnload = sessionStorage.getItem('fullPageUnload') === 'true';
+        if (isFullUnload) {
+          isAuthenticatedRef.current = false;
+          sessionStorage.removeItem('fullPageUnload');
+        }
+      }
     }
-  }, [user])
+  }, [user, isLoading])
   
   // Cache auth state to survive refreshes and back/forward navigation
   useEffect(() => {
@@ -63,24 +74,27 @@ export function useAuth() {
           return; // Skip authentication check if user recently interacted
         }
         
-        // Only attempt to refresh if we're coming back to the tab AND 
-        // we were previously authenticated but don't have a user object now
-        if (document.visibilityState === 'visible' && 
-            isAuthenticatedRef.current && 
-            !user && 
-            !isLoading) {
+        // Only check session if we're coming back to the tab
+        if (document.visibilityState === 'visible') {
+          // Do not trigger a refresh if we're already in a loading state
+          if (isLoading) return;
           
-          // Subtle check - don't set loading state to avoid UI flicker
-          try {
-            const { data } = await supabase.auth.getSession();
-            // If we have a session but no user, the auth listener will handle it
-            if (!data.session) {
-              // Only clear auth state if we really don't have a session
-              isAuthenticatedRef.current = false;
-              sessionStorage.removeItem('userMinimal');
+          // If we think we're authenticated but don't have a user object
+          if (isAuthenticatedRef.current && !user) {
+            console.log('Tab visible again, checking auth state without refresh');
+            
+            try {
+              // Just check if we have a session, don't reload
+              const { data } = await supabase.auth.getSession();
+              if (!data.session) {
+                // Only clear auth state if we really don't have a session
+                isAuthenticatedRef.current = false;
+                sessionStorage.removeItem('userMinimal');
+              }
+              // Do not force reload - the existing auth state listeners will handle this
+            } catch (err) {
+              console.error('Error checking auth state:', err);
             }
-          } catch (err) {
-            console.error('Error checking auth state:', err);
           }
         }
       };
@@ -97,6 +111,10 @@ export function useAuth() {
    // Initialize auth
     // Get initial session
     const getInitialSession = async () => {
+      // Set a flag to prevent multiple simultaneous auth checks
+      if (initialized) return;
+      setInitialized(true);
+      
       // Check if we have minimal user data in session storage to avoid loading state flicker
       if (typeof window !== 'undefined') {
         const storedUser = sessionStorage.getItem('userMinimal');
@@ -107,6 +125,8 @@ export function useAuth() {
             if (minimalUser && minimalUser.isAuthenticated) {
               // Don't set full loading state if we have minimal info
               setIsLoading(false);
+              // Set the auth ref to true to maintain state during tab switches
+              isAuthenticatedRef.current = true;
             }
           } catch (e) {
             console.error('Error parsing stored user data', e);
@@ -114,13 +134,19 @@ export function useAuth() {
         }
       }
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      if (session?.user) {
-        await loadUserProfile(session.user)
-      } else {
-        setIsLoading(false)
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession()
+        
+        if (session?.user) {
+          await loadUserProfile(session.user)
+        } else {
+          setIsLoading(false)
+        }
+      } catch (error) {
+        console.error('Error getting initial session:', error);
+        setIsLoading(false);
       }
     }
 
@@ -145,7 +171,10 @@ export function useAuth() {
 
   const loadUserProfile = async (supabaseUser: SupabaseUser) => {
     try {
-      setIsLoading(true)
+      // Only set loading if we're not already in a loading state
+      if (!isLoading) {
+        setIsLoading(true)
+      }
 
       const { data: fetchedProfile, error } = await supabase
         .from("user_profiles")

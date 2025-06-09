@@ -21,9 +21,12 @@ export function SessionStateProvider({ children }: { children: React.ReactNode }
     
     // Add unload handler to clean up temporary session values
     const handleUnload = () => {
-      // Clear any temporary flags
+      // Clear any temporary flags but preserve authentication state
       sessionStorage.removeItem('preventRefresh');
       sessionStorage.removeItem('intentionalNavigation');
+      
+      // Set a flag to indicate this is a real page unload, not a tab switch
+      sessionStorage.setItem('fullPageUnload', 'true');
     };
     
     window.addEventListener('beforeunload', handleUnload);
