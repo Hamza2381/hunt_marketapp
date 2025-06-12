@@ -184,39 +184,39 @@ export function useAuth() {
       
       let profile = fetchedProfile
 
-      // if (error) {
-      //   console.error("Error loading user profile:", error)
+      if (error) {
+        console.error("Error loading user profile:", error)
 
-      //   // If profile doesn't exist, create it
-      //   if (error.code === "PGRST116") {
-      //     console.log("Creating user profile...")
-      //     const { data: newProfile, error: createError } = await supabase
-      //       .from("user_profiles")
-      //       .insert({
-      //         id: supabaseUser.id,
-      //         name: supabaseUser.user_metadata?.name || supabaseUser.email?.split("@")[0] || "User",
-      //         email: supabaseUser.email!,
-      //         account_type: supabaseUser.user_metadata?.account_type || "personal",
-      //         company_name: supabaseUser.user_metadata?.company_name,
-      //         is_admin: false,
-      //         credit_limit: 0,
-      //         credit_used: 0,
-      //       })
-      //       .select()
-      //       .single()
+        // If profile doesn't exist, create it
+        if (error.code === "PGRST116") {
+          console.log("Creating user profile...")
+          const { data: newProfile, error: createError } = await supabase
+            .from("user_profiles")
+            .insert({
+              id: supabaseUser.id,
+              name: supabaseUser.user_metadata?.name || supabaseUser.email?.split("@")[0] || "User",
+              email: supabaseUser.email!,
+              account_type: supabaseUser.user_metadata?.account_type || "personal",
+              company_name: supabaseUser.user_metadata?.company_name,
+              is_admin: false,
+              credit_limit: 1000, // Default credit limit for new users
+              credit_used: 0,
+            })
+            .select()
+            .single()
 
-      //     if (createError) {
-      //       console.error("Error creating user profile:", createError)
-      //       setIsLoading(false)
-      //       return
-      //     }
+          if (createError) {
+            console.error("Error creating user profile:", createError)
+            setIsLoading(false)
+            return
+          }
 
-      //     profile = newProfile
-      //   } else {
-      //     setIsLoading(false)
-      //     return
-      //   }
-      // }
+          profile = newProfile
+        } else {
+          setIsLoading(false)
+          return
+        }
+      }
 
       if (profile) {
         const user: User = {
@@ -336,11 +336,37 @@ export function useAuth() {
 
     try {
          const dbUpdates: any = {}
-      if (updates.name !== undefined) dbUpdates.name = updates.name
-      if (updates.email !== undefined) dbUpdates.email = updates.email
+      if (updates.name !== undefined) dbUpdates.name = updates.name?.trim()
+      
+      // Special handling for email updates to prevent conflicts
+      if (updates.email !== undefined) {
+        const newEmail = updates.email.toLowerCase().trim();
+        
+        // Check if email is changing and if new email already exists
+        if (newEmail && newEmail !== user.email.toLowerCase()) {
+          const { data: existingUser, error: emailCheckError } = await supabase
+            .from("user_profiles")
+            .select("id, email")
+            .eq("email", newEmail)
+            .neq("id", user.id)
+            .maybeSingle();
+          
+          if (emailCheckError && emailCheckError.code !== 'PGRST116') {
+            console.error("Error checking email uniqueness:", emailCheckError);
+            return { success: false, error: "Failed to verify email uniqueness" };
+          }
+          
+          if (existingUser) {
+            return { success: false, error: `Email ${updates.email} is already in use` };
+          }
+          
+          dbUpdates.email = newEmail;
+        }
+      }
+      
       if (updates.accountType !== undefined) dbUpdates.account_type = updates.accountType
-      if (updates.company !== undefined) dbUpdates.company_name = updates.company
-      if (updates.phone !== undefined) dbUpdates.phone = updates.phone
+      if (updates.company !== undefined) dbUpdates.company_name = updates.company?.trim()
+      if (updates.phone !== undefined) dbUpdates.phone = updates.phone?.trim()
       
       // Special handling for credit fields to ensure proper decimal formatting
       if (updates.creditLimit !== undefined) {
@@ -483,11 +509,37 @@ export function useAuth() {
       
       // Convert from camelCase to snake_case for DB
       const dbUpdates: any = {}
-      if (updates.name !== undefined) dbUpdates.name = updates.name
-      if (updates.email !== undefined) dbUpdates.email = updates.email
+      if (updates.name !== undefined) dbUpdates.name = updates.name?.trim()
+      
+      // Special handling for email updates to prevent conflicts
+      if (updates.email !== undefined) {
+        const newEmail = updates.email.toLowerCase().trim();
+        
+        // Check if email is changing and if new email already exists
+        if (newEmail) {
+          const { data: existingUser, error: emailCheckError } = await supabase
+            .from("user_profiles")
+            .select("id, email")
+            .eq("email", newEmail)
+            .neq("id", id)
+            .maybeSingle();
+          
+          if (emailCheckError && emailCheckError.code !== 'PGRST116') {
+            console.error("Error checking email uniqueness:", emailCheckError);
+            return { success: false, error: "Failed to verify email uniqueness" };
+          }
+          
+          if (existingUser) {
+            return { success: false, error: `Email ${updates.email} is already in use by another user` };
+          }
+          
+          dbUpdates.email = newEmail;
+        }
+      }
+      
       if (updates.accountType !== undefined) dbUpdates.account_type = updates.accountType
-      if (updates.company !== undefined) dbUpdates.company_name = updates.company
-      if (updates.phone !== undefined) dbUpdates.phone = updates.phone
+      if (updates.company !== undefined) dbUpdates.company_name = updates.company?.trim()
+      if (updates.phone !== undefined) dbUpdates.phone = updates.phone?.trim()
       
       // Special handling for credit fields to ensure proper decimal formatting
       if (updates.creditLimit !== undefined) {
@@ -567,72 +619,29 @@ export function useAuth() {
     }
 
     try {
-      // Generate a random password if not provided
-      const password = userData.password || Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8).toUpperCase()
+      console.log("Calling API to create user:", userData.email);
       
-      console.log("Creating user with admin client:", userData.email);
+      const response = await fetch('/api/admin/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(userData),
+      });
       
-      // Create the user in auth using admin client
-      const { data, error } = await supabaseAdmin.auth.admin.createUser({
-        email: userData.email,
-        password,
-        email_confirm: true,
-      })
-
-      if (error) {
-        console.error("Error creating auth user:", error);
-        return { success: false, error: error.message }
+      const result = await response.json();
+      
+      console.log('API response:', result);
+      
+      if (!response.ok) {
+        return { success: false, error: result.error || 'Failed to create user' };
       }
-
-      // Create profile
-      if (data.user) {
       
-        const { error } = await supabase.from("user_profiles").update({
-    
-          name: userData.name,
-          // email: userData.email,
-          account_type: userData.accountType,
-          company_name: userData.company,
-          phone: userData.phone,
-          is_admin: userData.isAdmin || false,
-          credit_limit: userData.creditLimit || 0,
-          credit_used: userData.creditUsed || 0,
-          address_street: userData.address?.street,
-          address_city: userData.address?.city,
-          address_state: userData.address?.state,
-          address_zip: userData.address?.zipCode,
-          // temporary_password field will be added later
-          // temporary_password: true,
-        }).eq("id", data.user.id);
-
-        if (error) {
-          console.error("Error creating profile:", error)
-          return { success: false, error: error.message }
-        }
-
-        return { 
-          success: true,
-          user: {
-            id: data.user.id,
-            name: userData.name,
-            email: userData.email,
-            accountType: userData.accountType,
-            isAdmin: userData.isAdmin || false,
-            creditLimit: userData.creditLimit || 0,
-            creditUsed: userData.creditUsed || 0,
-            company: userData.company,
-            phone: userData.phone,
-            address: userData.address,
-            temporaryPassword: true, // This is just for UI display
-          },
-          password 
-        }
-      }
-
-      return { success: false, error: "Failed to create user" }
-    } catch (error) {
-      console.error("Error creating user:", error)
-      return { success: false, error: "An unexpected error occurred" }
+      return result;
+      
+    } catch (error: any) {
+      console.error("User creation error:", error);
+      return { success: false, error: error.message || "An unexpected error occurred" };
     }
   }
 
@@ -645,27 +654,152 @@ export function useAuth() {
     try {
       console.log("Deleting user with ID:", id);
       
-      // Delete profile first to maintain referential integrity
-      const { error: profileError } = await supabase.from("user_profiles").delete().eq("id", id)
+      // First, get user profile to check for existing orders
+      const { data: userProfile, error: fetchError } = await supabase
+        .from("user_profiles")
+        .select("email, name")
+        .eq("id", id)
+        .single();
       
-      if (profileError) {
-        console.error("Error deleting profile:", profileError)
-        return false
+      if (fetchError) {
+        console.error("Error fetching user profile:", fetchError);
+        return false;
       }
-
-      // Delete auth user with admin client
-      const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(id)
       
-      if (authError) {
-        console.error("Error deleting auth user:", authError)
-        return false
+      // Check for existing orders
+      const { data: existingOrders, error: ordersError } = await supabase
+        .from("orders")
+        .select("id")
+        .eq("user_id", id);
+      
+      if (ordersError) {
+        console.error("Error checking existing orders:", ordersError);
+        return false;
       }
+      
+      // If user has orders, we should not delete them completely
+      // Instead, we'll anonymize the user data
+      if (existingOrders && existingOrders.length > 0) {
+        console.log(`User has ${existingOrders.length} orders. Anonymizing user data instead of full deletion.`);
+        
+        // Anonymize the user profile
+        const anonymizedEmail = `deleted_user_${Date.now()}@anonymized.local`;
+        const { error: anonymizeError } = await supabase
+          .from("user_profiles")
+          .update({
+            name: "[Deleted User]",
+            email: anonymizedEmail,
+            phone: null,
+            address_street: null,
+            address_city: null,
+            address_state: null,
+            address_zip: null,
+            company_name: null,
+            status: "inactive",
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", id);
+        
+        if (anonymizeError) {
+          console.error("Error anonymizing user profile:", anonymizeError);
+          return false;
+        }
+        
+        // Delete from auth after anonymizing profile
+        const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(id);
+        
+        if (authError) {
+          console.error("Error deleting auth user:", authError);
+          // Continue anyway - the profile has been anonymized which is the main goal
+          console.log("Auth deletion failed but profile has been anonymized");
+        }
+        
+        console.log(`User ${userProfile.email} anonymized successfully due to existing orders`);
+        return true;
+      }
+      
+      // If no orders exist, we can safely delete everything
+      console.log("No orders found. Proceeding with full deletion.");
+      
+      try {
+        // STEP 1: Delete related data first (foreign key constraints)
+        console.log("Deleting chat messages...");
+        const { error: messagesError } = await supabase
+          .from("chat_messages")
+          .delete()
+          .eq("sender_id", id);
+        
+        if (messagesError) {
+          console.error("Error deleting chat messages:", messagesError);
+          // Continue anyway - this is not critical
+        }
+        
+        console.log("Deleting chat conversations...");
+        const { error: conversationsError } = await supabase
+          .from("chat_conversations")
+          .delete()
+          .eq("user_id", id);
+        
+        if (conversationsError) {
+          console.error("Error deleting chat conversations:", conversationsError);
+          // Continue anyway - this is not critical
+        }
+        
+        // STEP 2: Delete user profile FIRST to free up the email immediately
+        console.log("Deleting user profile...");
+        const { error: profileError } = await supabase
+          .from("user_profiles")
+          .delete()
+          .eq("id", id);
+        
+        if (profileError) {
+          console.error("Error deleting profile:", profileError);
+          return false;
+        }
+        
+        console.log("Profile deleted successfully - email is now available for reuse");
 
-      console.log("User deleted successfully");
-      return true
+        // STEP 3: Delete auth user AFTER profile deletion
+        // Add a small delay to ensure profile deletion is propagated
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        console.log("Deleting auth user...");
+        const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(id);
+        
+        if (authError) {
+          console.error("Error deleting auth user:", authError);
+          // The profile is already deleted, so the email is available for reuse
+          console.log("Auth user deletion failed, but profile was deleted - email is available for reuse");
+        } else {
+          console.log("Auth user deleted successfully");
+        }
+
+        // STEP 4: Verify cleanup by checking if email is truly available
+        const { data: verifyProfile, error: verifyError } = await supabase
+          .from("user_profiles")
+          .select("email")
+          .eq("email", userProfile.email.toLowerCase())
+          .maybeSingle();
+        
+        if (verifyError && verifyError.code !== 'PGRST116') {
+          console.warn("Could not verify profile deletion:", verifyError);
+        } else if (verifyProfile) {
+          console.error("Profile still exists after deletion - this should not happen");
+          return false;
+        } else {
+          console.log("Verified: Profile completely removed from database");
+        }
+
+        console.log(`User ${userProfile.email} deleted completely and email is confirmed available for reuse`);
+        return true;
+        
+      } catch (deleteError) {
+        console.error("Error during user deletion process:", deleteError);
+        return false;
+      }
     } catch (error) {
-      console.error("Error deleting user:", error)
-      return false
+      console.error("Error deleting user:", error);
+      return false;
     }
   }
 

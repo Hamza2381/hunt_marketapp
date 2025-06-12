@@ -27,37 +27,21 @@ export function OrderHistoryPage() {
         return;
       }
 
-      // First, check if we have a user mapping in localStorage from previous orders
-      let userMapping;
-      try {
-        const savedMapping = localStorage.getItem('userMapping');
-        if (savedMapping) {
-          userMapping = JSON.parse(savedMapping);
-          console.log('Found saved user mapping:', userMapping);
-        }
-      } catch (e) {
-        console.error('Error reading user mapping:', e);
-      }
-
       try {
         setIsLoading(true);
         setError(null);
 
-        // Include user mapping if available
-        const body = {
-          userId: user.id,
-          userEmail: user.email,
-          // Include numeric ID if we have it
-          numericId: userMapping?.numericId
-        };
+        console.log('Fetching orders for user:', user.id);
         
-        // Call the new user-orders API
+        // Call the updated user-orders API with just the user ID
         const response = await fetch('/api/orders/user-orders', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify(body),
+          body: JSON.stringify({
+            userId: user.id
+          }),
         });
 
         if (!response.ok) {
@@ -67,39 +51,8 @@ export function OrderHistoryPage() {
 
         const data = await response.json();
         
-        // Client-side filter to match orders with the current user
-        const userOrders = data.orders.filter(order => {
-          console.log(`Checking order ${order.id} with user_id ${order.user_id} against user ${user.id}`);
-          
-          // Use simplified approach: show orders with user_id = 1 
-          // since we're creating all orders with this ID temporarily
-          return order.user_id === user.id;
-          
-          // Once you implement a proper mapping table, you can use this more specific logic:
-          /*
-          return (
-            // Direct UUID match (unlikely but possible)
-            order.user_id === user.id ||
-            // Match against numeric ID from mapping
-            (userMapping?.numericId && order.user_id === userMapping.numericId) ||
-            // Match against numeric ID from response
-            (data.userMapping?.numericId && order.user_id === data.userMapping.numericId)
-          );
-          */
-        });
-        
-        // Save any user mapping returned by the API for future use
-        if (data.userMapping && data.userMapping.numericId) {
-          console.log('Saving user mapping from API response:', data.userMapping);
-          try {
-            localStorage.setItem('userMapping', JSON.stringify(data.userMapping));
-          } catch (e) {
-            console.error('Error saving user mapping:', e);
-          }
-        }
-        
-        console.log(`Showing ${userOrders.length} orders for user ${user.email}`);
-        setOrders(userOrders);
+        console.log(`Retrieved ${data.orders.length} orders for user ${user.email}`);
+        setOrders(data.orders);
       } catch (err) {
         console.error('Error fetching orders:', err);
         setError(err.message);
@@ -111,24 +64,11 @@ export function OrderHistoryPage() {
     fetchOrders()
   }, [user])
 
-  // Add a filter to show only current user's orders or all orders
-  const [userFilter, setUserFilter] = useState("my"); // "all" or "my" - default to "my"
-
   const filteredOrders = orders.filter((order) => {
-    // First apply the search and status filters
     const matchesSearch = order.id.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === "all" || order.status === statusFilter;
     
-    // Then apply the user filter if set to "my"
-    // FIXED: Use our simplified mapping approach - all user orders have user_id = 1
-    const matchesUser = userFilter === "all" || (
-      userFilter === "my" && (
-        // Match against our mapping system
-        order.user_id === user.id
-      )
-    );
-    
-    return matchesSearch && matchesStatus && matchesUser;
+    return matchesSearch && matchesStatus;
   });
 
   const getStatusColor = (status) => {
@@ -226,16 +166,6 @@ export function OrderHistoryPage() {
                     <SelectItem value="cancelled">Cancelled</SelectItem>
                   </SelectContent>
                 </Select>
-                
-                <Select value={userFilter} onValueChange={setUserFilter}>
-                  <SelectTrigger className="w-40">
-                    <SelectValue placeholder="Filter by user" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Orders</SelectItem>
-                    <SelectItem value="my">My Orders</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
             </div>
           </CardContent>
@@ -244,7 +174,7 @@ export function OrderHistoryPage() {
         {/* Orders List */}
         <div className="space-y-4">
           {filteredOrders.map((order) => (
-            <Card key={order.id}>
+            <Card key={order.orderId}>
               <CardHeader>
                 <div className="flex justify-between items-start">
                   <div>
@@ -265,10 +195,10 @@ export function OrderHistoryPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setExpandedOrder(expandedOrder === order.id ? null : order.id)}
+                      onClick={() => setExpandedOrder(expandedOrder === order.orderId ? null : order.orderId)}
                     >
                       <Eye className="h-4 w-4 mr-1" />
-                      {expandedOrder === order.id ? "Hide" : "View"} Details
+                      {expandedOrder === order.orderId ? "Hide" : "View"} Details
                     </Button>
                     {order.status === "delivered" && (
                       <Button variant="outline" size="sm">
@@ -280,7 +210,7 @@ export function OrderHistoryPage() {
                 </div>
               </CardHeader>
 
-              {expandedOrder === order.id && (
+              {expandedOrder === order.orderId && (
                 <CardContent>
                   <Separator className="mb-4" />
 
@@ -322,6 +252,18 @@ export function OrderHistoryPage() {
                             <p className="text-green-600 font-medium">
                               {new Date(order.actualDelivery).toLocaleDateString()}
                             </p>
+                          </div>
+                        )}
+                        {order.shippingAddress && (
+                          <div>
+                            <p className="text-gray-600">Shipping Address:</p>
+                            <p>{order.shippingAddress}</p>
+                          </div>
+                        )}
+                        {order.billingAddress && (
+                          <div>
+                            <p className="text-gray-600">Billing Address:</p>
+                            <p>{order.billingAddress}</p>
                           </div>
                         )}
                       </div>

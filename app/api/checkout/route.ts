@@ -35,10 +35,10 @@ export async function POST(request: NextRequest) {
       name: user.name || 'Not provided'
     });
 
-    // Verify the user exists in user_profiles
+    // Verify the user exists in user_profiles using UUID
     const { data: userProfile, error: profileError } = await supabaseAdmin
       .from('user_profiles')
-      .select('id')
+      .select('id, credit_limit, credit_used')
       .eq('id', user.id)
       .single();
 
@@ -48,15 +48,24 @@ export async function POST(request: NextRequest) {
     }
 
     if (!userProfile) {
-      console.error('User profile not found, this should not happen since user is authenticated');
+      console.error('User profile not found');
       return NextResponse.json({ error: 'User profile not found' }, { status: 404 });
     }
 
-    // SIMPLIFIED SOLUTION:
-    // Since we know from the logs that orders are using user_id = 1, we'll use this for now
-    // Later, you should implement a proper user_id mapping strategy
-    const numericUserId = user.id;
-    console.log('Using numeric user ID for order:', numericUserId);
+    // Check if user has enough credit
+    const availableCredit = userProfile.credit_limit - userProfile.credit_used;
+    if (availableCredit < total) {
+      console.error('Insufficient credit:', { availableCredit, total });
+      return NextResponse.json({ 
+        error: 'Insufficient credit', 
+        details: {
+          required: total,
+          available: availableCredit,
+          creditLimit: userProfile.credit_limit,
+          creditUsed: userProfile.credit_used
+        }
+      }, { status: 400 });
+    }
     
     // Generate unique order number
     const orderNumber = `ORD-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 1000)}`;
@@ -65,10 +74,13 @@ export async function POST(request: NextRequest) {
     const shippingAddressString = `${shippingAddress.street}, ${shippingAddress.city}, ${shippingAddress.state} ${shippingAddress.zipCode}`;
     const billingAddressString = `${billingAddress.street}, ${billingAddress.city}, ${billingAddress.state} ${billingAddress.zipCode}`;
     
-    // Create the order data
+    // Start a transaction by creating order and updating credit in sequence
+    console.log('Starting order creation transaction...');
+    
+    // Create the order data with proper UUID
     const orderData = {
       order_number: orderNumber,
-      user_id: numericUserId, // Using user_id = 1 for now
+      user_id: user.id, // Use UUID directly
       total_amount: Number(total),
       payment_method: "Credit Line",
       status: "pending",
@@ -122,6 +134,8 @@ export async function POST(request: NextRequest) {
     
     if (orderItems.length === 0) {
       console.error('No valid items to process after validation');
+      // Rollback: Delete the order we just created
+      await supabaseAdmin.from('orders').delete().eq('id', order.id);
       return NextResponse.json({ error: 'No valid items to process' }, { status: 400 });
     }
     
@@ -134,60 +148,56 @@ export async function POST(request: NextRequest) {
   
       if (itemsError) {
         console.error('Error adding order items:', itemsError);
+        // Rollback: Delete the order we just created
+        await supabaseAdmin.from('orders').delete().eq('id', order.id);
         return NextResponse.json({ error: `Error adding order items: ${itemsError.message}` }, { status: 400 });
       }
     } catch (err) {
       console.error('Unexpected error adding order items:', err);
+      // Rollback: Delete the order we just created
+      await supabaseAdmin.from('orders').delete().eq('id', order.id);
       return NextResponse.json({ error: `Unexpected error adding order items: ${err.message}` }, { status: 500 });
     }
 
-    // Update user's credit
+    // Update user's credit - this is the final step
     try {
-      const newCreditUsed = user.creditUsed + total;
-      console.log(`Updating credit for user ${user.id}: ${user.creditUsed} + ${total} = ${newCreditUsed}`);
-
-      // Update credit in the user_profiles table
-      const updateData = {
-        credit_used: newCreditUsed
-      };
+      const newCreditUsed = userProfile.credit_used + total;
+      console.log(`Updating credit for user ${user.id}: ${userProfile.credit_used} + ${total} = ${newCreditUsed}`);
 
       const { error: creditError } = await supabaseAdmin
         .from('user_profiles')
-        .update(updateData)
+        .update({
+          credit_used: newCreditUsed,
+          updated_at: new Date().toISOString()
+        })
         .eq('id', user.id);
 
       if (creditError) {
         console.error('Error updating credit:', creditError);
-        
-        // Try alternative field name (camelCase)
-        const { error: altError } = await supabaseAdmin
-          .from('user_profiles')
-          .update({ creditUsed: newCreditUsed })
-          .eq('id', user.id);
-          
-        if (altError) {
-          console.error('Alternative credit update also failed:', altError);
-          // Continue anyway - don't fail the whole order just for the credit update
-        }
+        // Rollback: Delete order and items
+        await supabaseAdmin.from('order_items').delete().eq('order_id', order.id);
+        await supabaseAdmin.from('orders').delete().eq('id', order.id);
+        return NextResponse.json({ error: `Error updating credit: ${creditError.message}` }, { status: 400 });
       }
+      
+      console.log('Credit updated successfully');
     } catch (err) {
       console.error('Error updating credit:', err);
-      // Continue anyway - don't fail the whole order just for the credit update
+      // Rollback: Delete order and items
+      await supabaseAdmin.from('order_items').delete().eq('order_id', order.id);
+      await supabaseAdmin.from('orders').delete().eq('id', order.id);
+      return NextResponse.json({ error: `Error updating credit: ${err.message}` }, { status: 500 });
     }
 
-    // Return success response with mapping for order history
+    // Return success response
     return NextResponse.json({
       success: true,
       order: {
         id: order.id,
         orderNumber: orderNumber,
         total: total,
-        items: items.length
-      },
-      // Include the mapping so order history can find this order
-      userMapping: {
-        authId: user.id,
-        numericId: numericUserId
+        items: items.length,
+        userId: user.id // Return the UUID for reference
       }
     });
   } catch (error) {

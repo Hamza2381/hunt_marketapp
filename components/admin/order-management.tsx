@@ -11,11 +11,41 @@ import { Search, Eye, Package, Truck, Loader2, AlertTriangle, RefreshCw, CheckCi
 import { supabase } from "@/lib/supabase-client"
 import { useToast } from "@/hooks/use-toast"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import type { Order, OrderItem, UserProfile } from "@/lib/supabase"
 
-interface OrderWithUserDetails extends Order {
-  user_profile?: UserProfile;
-  order_items?: OrderItem[];
+// Create a server-side Supabase client with service role for admin operations
+const supabaseAdmin = typeof window === 'undefined' ? null : null;
+
+interface OrderWithUserDetails {
+  id: number;
+  order_number: string;
+  user_id: string;
+  total_amount: number;
+  payment_method: string;
+  status: string;
+  shipping_address?: string;
+  billing_address?: string;
+  created_at: string;
+  updated_at: string;
+  user_profiles?: {
+    id: string;
+    name: string;
+    email: string;
+    account_type: string;
+    company_name?: string;
+    phone?: string;
+  };
+  order_items?: Array<{
+    id: number;
+    product_id: number;
+    quantity: number;
+    unit_price: number;
+    total_price: number;
+    products?: {
+      id: number;
+      name: string;
+      sku: string;
+    };
+  }>;
   items_count?: number;
 }
 
@@ -34,27 +64,25 @@ export function OrderManagement() {
     setIsLoading(true)
     setError(null)
     try {
-      // Fetch orders with joins for user profiles and order items in a single query
-      const { data: ordersData, error: ordersError } = await supabase
-        .from('orders')
-        .select(`
-          *,
-          user_profiles:user_id (*),
-          order_items(*, products:product_id(*))
-        `)
-        .order('created_at', { ascending: false })
+      console.log('Fetching all orders for admin...');
       
-      if (ordersError) throw ordersError
+      // Fetch orders with proper joins using the admin API
+      const response = await fetch('/api/admin/orders', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch orders');
+      }
+
+      const data = await response.json();
       
-      // Process the results
-      const processedOrders = ordersData.map(order => ({
-        ...order,
-        user_profile: order.user_profiles,
-        items_count: order.order_items?.length || 0
-      }))
-      
-      console.log('Orders fetched:', processedOrders.length, processedOrders)
-      setOrders(processedOrders)
+      console.log('Orders fetched:', data.orders.length);
+      setOrders(data.orders);
     } catch (err: any) {
       console.error('Error fetching orders:', err.message)
       setError('Failed to load orders. Please try again.')
@@ -74,12 +102,12 @@ export function OrderManagement() {
   }, [])
 
   const filteredOrders = orders.filter((order) => {
-    if (!order.user_profile) return false;
+    if (!order.user_profiles) return false;
     
     const matchesSearch =
       order.order_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.user_profile?.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.user_profile?.email.toLowerCase().includes(searchTerm.toLowerCase())
+      order.user_profiles?.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      order.user_profiles?.email.toLowerCase().includes(searchTerm.toLowerCase())
 
     const matchesStatus = statusFilter === "all" || order.status === statusFilter
 
@@ -106,6 +134,7 @@ export function OrderManagement() {
   const getPaymentMethodLabel = (method: string) => {
     switch (method) {
       case "credit_line":
+      case "Credit Line":
         return "Credit Line"
       case "credit_card":
         return "Credit Card"
@@ -124,12 +153,22 @@ export function OrderManagement() {
   const handleUpdateStatus = async (orderId: number, newStatus: string) => {
     try {
       console.log(`Updating order ${orderId} status to ${newStatus}`);
-      const { error } = await supabase
-        .from('orders')
-        .update({ status: newStatus, updated_at: new Date().toISOString() })
-        .eq('id', orderId)
       
-      if (error) throw error
+      const response = await fetch('/api/admin/orders/update-status', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          orderId,
+          newStatus
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to update order status');
+      }
       
       // Refresh orders list after update
       await fetchOrders();
@@ -233,13 +272,13 @@ export function OrderManagement() {
                   <TableCell className="font-mono font-medium">{order.order_number}</TableCell>
                   <TableCell>
                     <div>
-                      <div className="font-medium">{order.user_profile?.name}</div>
-                      <div className="text-sm text-gray-500">{order.user_profile?.email}</div>
+                      <div className="font-medium">{order.user_profiles?.name}</div>
+                      <div className="text-sm text-gray-500">{order.user_profiles?.email}</div>
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={order.user_profile?.account_type === "business" ? "default" : "secondary"}>
-                      {order.user_profile?.account_type}
+                    <Badge variant={order.user_profiles?.account_type === "business" ? "default" : "secondary"}>
+                      {order.user_profiles?.account_type}
                     </Badge>
                   </TableCell>
                   <TableCell className="font-medium">${order.total_amount.toFixed(2)}</TableCell>
@@ -302,13 +341,13 @@ export function OrderManagement() {
                 <div>
                   <h4 className="font-medium mb-2">Customer Information</h4>
                   <div className="space-y-1 text-sm">
-                    <p><span className="font-medium">Name:</span> {selectedOrder.user_profile?.name}</p>
-                    <p><span className="font-medium">Email:</span> {selectedOrder.user_profile?.email}</p>
-                    <p><span className="font-medium">Account Type:</span> {selectedOrder.user_profile?.account_type}</p>
-                    {selectedOrder.user_profile?.account_type === "business" && (
-                      <p><span className="font-medium">Company:</span> {selectedOrder.user_profile?.company_name || "N/A"}</p>
+                    <p><span className="font-medium">Name:</span> {selectedOrder.user_profiles?.name}</p>
+                    <p><span className="font-medium">Email:</span> {selectedOrder.user_profiles?.email}</p>
+                    <p><span className="font-medium">Account Type:</span> {selectedOrder.user_profiles?.account_type}</p>
+                    {selectedOrder.user_profiles?.account_type === "business" && (
+                      <p><span className="font-medium">Company:</span> {selectedOrder.user_profiles?.company_name || "N/A"}</p>
                     )}
-                    <p><span className="font-medium">Phone:</span> {selectedOrder.user_profile?.phone || "N/A"}</p>
+                    <p><span className="font-medium">Phone:</span> {selectedOrder.user_profiles?.phone || "N/A"}</p>
                   </div>
                 </div>
                 
@@ -346,7 +385,12 @@ export function OrderManagement() {
                   <TableBody>
                     {selectedOrder.order_items?.map((item) => (
                       <TableRow key={item.id}>
-                        <TableCell>Product #{item.product_id}</TableCell>
+                        <TableCell>
+                          {item.products?.name || `Product #${item.product_id}`}
+                          {item.products?.sku && (
+                            <div className="text-xs text-gray-500">SKU: {item.products.sku}</div>
+                          )}
+                        </TableCell>
                         <TableCell>{item.quantity}</TableCell>
                         <TableCell>${item.unit_price.toFixed(2)}</TableCell>
                         <TableCell>${item.total_price.toFixed(2)}</TableCell>

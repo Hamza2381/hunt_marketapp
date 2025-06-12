@@ -9,9 +9,9 @@ import { CategoryManagement } from "./category-management"
 import { OrderManagement } from "./order-management"
 import { ChatManagement } from "./chat-management"
 import { Users, Package, ShoppingCart, DollarSign, TrendingUp, MessageCircle, Loader2 } from "lucide-react"
-import { supabase } from "@/lib/supabase-client"
 import { useAuth } from "@/hooks/use-auth"
 import { useRouter } from "next/navigation"
+import { supabase } from "@/lib/supabase-client"
 
 export function AdminDashboard() {
   const [stats, setStats] = useState({
@@ -37,75 +37,45 @@ export function AdminDashboard() {
     const fetchStats = async () => {
       setIsLoading(true)
       try {
-        // Fetch user count
-        const { count: userCount } = await supabase
-          .from('user_profiles')
-          .select('*', { count: 'exact', head: true })
+        console.log('Fetching admin stats from API...');
         
-        // Fetch active users (logged in the last 30 days)
-        const thirtyDaysAgo = new Date()
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
-        const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0] // Use just the date part
-        const { count: activeUserCount } = await supabase
-          .from('user_profiles')
-          .select('*', { count: 'exact', head: true })
-          .filter('last_login', 'gte', thirtyDaysAgoStr)
+        const response = await fetch('/api/admin/stats', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
         
-        // Fetch product count
-        const { count: productCount } = await supabase
-          .from('products')
-          .select('*', { count: 'exact', head: true })
+        if (!response.ok) {
+          throw new Error('Failed to fetch admin stats');
+        }
         
-        // Fetch order count
-        const { count: orderCount } = await supabase
-          .from('orders')
-          .select('*', { count: 'exact', head: true })
+        const data = await response.json();
         
-        // Fetch total revenue
-        const { data: revenueData } = await supabase
-          .from('orders')
-          .select('total_amount')
-          
-        const totalRevenue = revenueData?.reduce((sum, order) => sum + order.total_amount, 0) || 0
-        
-        // Fetch last month's revenue for growth calculation
-        const lastMonth = new Date()
-        lastMonth.setMonth(lastMonth.getMonth() - 1)
-        const lastMonthStr = lastMonth.toISOString().split('T')[0]
-        
-        const twoMonthsAgo = new Date()
-        twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2)
-        const twoMonthsAgoStr = twoMonthsAgo.toISOString().split('T')[0]
-        
-        const { data: lastMonthData } = await supabase
-          .from('orders')
-          .select('total_amount')
-          .filter('created_at', 'gte', lastMonthStr)
-        
-        const { data: previousMonthData } = await supabase
-          .from('orders')
-          .select('total_amount')
-          .filter('created_at', 'gte', twoMonthsAgoStr)
-          .filter('created_at', 'lt', lastMonthStr)
-        
-        const lastMonthRevenue = lastMonthData?.reduce((sum, order) => sum + order.total_amount, 0) || 0
-        const previousMonthRevenue = previousMonthData?.reduce((sum, order) => sum + order.total_amount, 0) || 0
-        
-        // Calculate growth percentage
-        const growthPercentage = previousMonthRevenue > 0 
-          ? ((lastMonthRevenue - previousMonthRevenue) / previousMonthRevenue) * 100
-          : 0
-        
-        setStats({
-          totalUsers: userCount || 0,
-          totalProducts: productCount || 0,
-          totalOrders: orderCount || 0,
-          totalRevenue: totalRevenue,
-          monthlyGrowth: parseFloat(growthPercentage.toFixed(1)),
-          activeUsers: activeUserCount || 0,
-        })
+        if (data.success) {
+          console.log('Admin stats received:', data.stats);
+          setStats(data.stats);
+        } else {
+          console.error('Error in admin stats response:', data.error);
+          setStats({
+            totalUsers: 0,
+            totalProducts: 0,
+            totalOrders: 0,
+            totalRevenue: 0,
+            monthlyGrowth: 0,
+            activeUsers: 0,
+          });
+        }
       } catch (error) {
         console.error('Error fetching admin dashboard stats:', error)
+        setStats({
+          totalUsers: 0,
+          totalProducts: 0,
+          totalOrders: 0,
+          totalRevenue: 0,
+          monthlyGrowth: 0,
+          activeUsers: 0,
+        });
       } finally {
         setIsLoading(false)
       }
@@ -115,6 +85,107 @@ export function AdminDashboard() {
       fetchStats()
     }
   }, [user, router])
+
+  // 🔥 REAL-TIME STATS UPDATES
+  useEffect(() => {
+    if (!user?.isAdmin) return
+
+    console.log('Setting up real-time stats subscriptions...')
+
+    // Subscribe to user_profiles changes
+    const userChannel = supabase
+      .channel('user-profile-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'user_profiles' },
+        (payload) => {
+          console.log('User profile change detected:', payload.eventType)
+          
+          // Optimistic updates based on the event type
+          if (payload.eventType === 'INSERT') {
+            setStats(prev => ({
+              ...prev,
+              totalUsers: prev.totalUsers + 1
+            }))
+          } else if (payload.eventType === 'DELETE') {
+            setStats(prev => ({
+              ...prev,
+              totalUsers: Math.max(0, prev.totalUsers - 1)
+            }))
+          }
+          // For UPDATE events, we might need to refetch if it affects activeUsers
+        }
+      )
+      .subscribe()
+
+    // Subscribe to products changes
+    const productChannel = supabase
+      .channel('product-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'products' },
+        (payload) => {
+          console.log('Product change detected:', payload.eventType)
+          
+          if (payload.eventType === 'INSERT') {
+            setStats(prev => ({
+              ...prev,
+              totalProducts: prev.totalProducts + 1
+            }))
+          } else if (payload.eventType === 'DELETE') {
+            setStats(prev => ({
+              ...prev,
+              totalProducts: Math.max(0, prev.totalProducts - 1)
+            }))
+          }
+        }
+      )
+      .subscribe()
+
+    // Subscribe to orders changes
+    const orderChannel = supabase
+      .channel('order-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders' },
+        (payload) => {
+          console.log('Order change detected:', payload.eventType)
+          
+          if (payload.eventType === 'INSERT') {
+            const newOrder = payload.new as any
+            setStats(prev => ({
+              ...prev,
+              totalOrders: prev.totalOrders + 1,
+              totalRevenue: prev.totalRevenue + (newOrder.total_amount || 0)
+            }))
+          } else if (payload.eventType === 'DELETE') {
+            const deletedOrder = payload.old as any
+            setStats(prev => ({
+              ...prev,
+              totalOrders: Math.max(0, prev.totalOrders - 1),
+              totalRevenue: Math.max(0, prev.totalRevenue - (deletedOrder.total_amount || 0))
+            }))
+          } else if (payload.eventType === 'UPDATE') {
+            const oldOrder = payload.old as any
+            const newOrder = payload.new as any
+            const revenueDiff = (newOrder.total_amount || 0) - (oldOrder.total_amount || 0)
+            setStats(prev => ({
+              ...prev,
+              totalRevenue: Math.max(0, prev.totalRevenue + revenueDiff)
+            }))
+          }
+        }
+      )
+      .subscribe()
+
+    // Cleanup subscriptions on unmount
+    return () => {
+      console.log('Cleaning up real-time stats subscriptions...')
+      supabase.removeChannel(userChannel)
+      supabase.removeChannel(productChannel)
+      supabase.removeChannel(orderChannel)
+    }
+  }, [user])
 
   if (!user) {
     return (
@@ -143,10 +214,10 @@ export function AdminDashboard() {
       <div className="container mx-auto px-4 py-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold">Admin Dashboard</h1>
-          <p className="text-gray-600 mt-2">Manage your marketplace</p>
+          <p className="text-gray-600 mt-2">Manage your marketplace • Live Updates</p>
         </div>
 
-        {/* Stats Cards */}
+        {/* Stats Cards - Now with Real-time Updates */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -161,7 +232,7 @@ export function AdminDashboard() {
                 </div>
               ) : (
                 <>
-                  <div className="text-2xl font-bold">{stats.totalUsers.toLocaleString()}</div>
+                  <div className="text-2xl font-bold animate-pulse-once">{stats.totalUsers.toLocaleString()}</div>
                   <p className="text-xs text-muted-foreground">{stats.activeUsers} active this month</p>
                 </>
               )}
@@ -181,7 +252,7 @@ export function AdminDashboard() {
                 </div>
               ) : (
                 <>
-                  <div className="text-2xl font-bold">{stats.totalProducts.toLocaleString()}</div>
+                  <div className="text-2xl font-bold animate-pulse-once">{stats.totalProducts.toLocaleString()}</div>
                   <p className="text-xs text-muted-foreground">Across all categories</p>
                 </>
               )}
@@ -201,8 +272,8 @@ export function AdminDashboard() {
                 </div>
               ) : (
                 <>
-                  <div className="text-2xl font-bold">{stats.totalOrders.toLocaleString()}</div>
-                  <p className="text-xs text-muted-foreground">This month</p>
+                  <div className="text-2xl font-bold animate-pulse-once">{stats.totalOrders.toLocaleString()}</div>
+                  <p className="text-xs text-muted-foreground">All time orders</p>
                 </>
               )}
             </CardContent>
@@ -221,7 +292,7 @@ export function AdminDashboard() {
                 </div>
               ) : (
                 <>
-                  <div className="text-2xl font-bold">${stats.totalRevenue.toLocaleString()}</div>
+                  <div className="text-2xl font-bold animate-pulse-once">${stats.totalRevenue.toLocaleString()}</div>
                   <p className="text-xs text-muted-foreground">
                     <TrendingUp className="inline h-3 w-3 mr-1" />
                     {stats.monthlyGrowth >= 0 ? '+' : ''}{stats.monthlyGrowth}% from last month

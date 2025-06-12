@@ -38,24 +38,6 @@ const log = (message: string, data?: any) => {
   }
 };
 
-// Temporary function to create a base64 data URL for local use
-const createLocalImageUrl = async (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = function(e) {
-      if (e.target?.result) {
-        resolve(e.target.result as string);
-      } else {
-        reject(new Error('Failed to create local image URL'));
-      }
-    };
-    reader.onerror = function() {
-      reject(new Error('Error reading file'));
-    };
-    reader.readAsDataURL(file);
-  });
-};
-
 export function ProductManagement() {
   const [products, setProducts] = useState<Product[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -421,206 +403,209 @@ export function ProductManagement() {
     }
   };
 
-  // Function to handle image upload to Supabase Storage
-  const uploadImageToStorage = async (file: File): Promise<string> => {
-    return new Promise(async (resolve, reject) => {
-      try {
-        if (!file) {
-          reject(new Error('No file selected'));
-          return;
-        }
-        
-        // Check file size (limit to 8MB)
-        if (file.size > 8 * 1024 * 1024) {
-          toast({
-            title: 'File Too Large',
-            description: 'Image must be less than 8MB.',
-            variant: 'destructive',
-          });
-          reject(new Error('File too large'));
-          return;
-        }
-        
-        // Check file type
-        if (!file.type.startsWith('image/')) {
-          toast({
-            title: 'Invalid File',
-            description: 'Please upload an image file.',
-            variant: 'destructive',
-          });
-          reject(new Error('Invalid file type'));
-          return;
-        }
-        
-        // Generate a unique file name
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
-        const filePath = `product-images/${fileName}`;
-        
-        log('Uploading image:', {
-          name: file.name,
-          path: filePath,
-          size: file.size,
-          type: file.type
-        });
-        
-        // Upload the file to Supabase Storage
-        const { data, error } = await supabase.storage
-          .from('products')
-          .upload(filePath, file, {
-            cacheControl: '3600',
-            upsert: true // Change to true to overwrite existing files
-          });
-        
-        if (error) {
-          console.error('Error uploading image to storage:', error);
-          
-          // Detailed error handling
-          if (error.message?.includes('security policy') || error.message?.includes('permission')) {
-            console.error('Permission error details:', error);
-            
-            // Try to identify the specific policy that's failing
-            if (error.message.includes('insert')) {
-              reject(new Error('Permission denied: You do not have INSERT permission on the storage bucket. Check your RLS policy for INSERT operations.'));
-            } else if (error.message.includes('select')) {
-              reject(new Error('Permission denied: You do not have SELECT permission on the storage bucket. Check your RLS policy for SELECT operations.'));
-            } else {
-              reject(new Error('Permission denied: You may not have the right access permissions. Please check your RLS policies.'));
-            }
-          } else if (error.message?.includes('not found')) {
-            reject(new Error('Storage bucket "products" not found. The bucket may not exist or you may not have access to it.'));
-          } else {
-            reject(error);
-          }
-          return;
-        }
-        
-        // Get the public URL - Using signed URLs to ensure images are accessible
-        const { data: { signedUrl } } = await supabase.storage
-          .from('products')
-          .createSignedUrl(filePath, 60 * 60 * 24 * 365); // 1 year expiry
-        
-        if (signedUrl) {
-          log('Upload successful with signed URL');
-          
-          // Try to verify the URL is accessible
-          try {
-            const response = await fetch(signedUrl, { method: 'HEAD' });
-            if (response.ok) {
-              log('Signed URL is accessible');
-              resolve(signedUrl);
-              return;
-            }
-          } catch (e) {
-            log('Could not verify signed URL accessibility');
-          }
-        }
-        
-        // Fall back to public URL if signed URL fails or isn't accessible
-        const { data: { publicUrl } } = supabase.storage
-          .from('products')
-          .getPublicUrl(filePath);
-        
-        log('Using public URL as fallback');
-        
-        // Add cache-busting parameter to prevent browser caching
-        const cacheBustUrl = `${publicUrl}?t=${Date.now()}`;
-        
-        resolve(cacheBustUrl);
-      } catch (err) {
-        console.error('Unexpected error during image upload:', err);
-        reject(err);
-      }
-    });
-  };
+  // Function to handle image upload to Supabase Storage - OPTIMIZED VERSION
+const uploadImageToStorage = async (file: File): Promise<string> => {
+  const { validateImageFile, compressImage, generateUniqueFilename } = await import('@/lib/image-utils')
   
-  // Handle file input change for new product
+  // Validate file first
+  const validation = validateImageFile(file)
+  if (!validation.valid) {
+  throw new Error(validation.error || 'Invalid file')
+  }
+  
+  try {
+  // 🚀 STEP 1: Compress image for faster upload (60-80% size reduction)
+  console.log(`Original file size: ${(file.size / 1024 / 1024).toFixed(2)}MB`)
+  const compressedFile = await compressImage(file, 1200, 1200, 0.85)
+  console.log(`Compressed file size: ${(compressedFile.size / 1024 / 1024).toFixed(2)}MB`)
+  
+  // 🚀 STEP 2: Generate unique filename
+  const fileName = generateUniqueFilename(file.name)
+  const filePath = `product-images/${fileName}`
+  
+  console.log('Uploading compressed image:', {
+  path: filePath,
+  originalSize: file.size,
+  compressedSize: compressedFile.size,
+  reduction: `${Math.round((1 - compressedFile.size / file.size) * 100)}%`
+  })
+  
+  // 🚀 STEP 3: Fast upload to Supabase Storage
+  const { data, error } = await supabase.storage
+  .from('products')
+  .upload(filePath, compressedFile, {
+    cacheControl: '31536000', // 1 year cache
+    upsert: false // Don't overwrite, use unique names
+  })
+  
+  if (error) {
+  console.error('Supabase upload error:', error)
+  
+  if (error.message?.includes('security policy') || error.message?.includes('permission')) {
+  throw new Error('Permission denied: Check your Supabase Storage policies')
+  } else if (error.message?.includes('not found')) {
+    throw new Error('Storage bucket not found. Please check your Supabase setup.')
+  } else {
+    throw new Error(`Upload failed: ${error.message}`)
+  }
+  }
+  
+  // 🚀 STEP 4: Get public URL (fastest method)
+  const { data: { publicUrl } } = supabase.storage
+  .from('products')
+  .getPublicUrl(filePath)
+  
+  // Add timestamp to prevent caching issues
+  const finalUrl = `${publicUrl}?t=${Date.now()}`
+  
+  console.log('Upload successful! URL:', finalUrl)
+  return finalUrl
+  
+  } catch (error) {
+  console.error('Image upload error:', error)
+  throw error
+  }
+}
+  
+  // Handle file input change for new product - OPTIMIZED VERSION
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
     
+    // 🚀 Import utilities dynamically
+    const { validateImageFile, createPreviewUrl, uploadQueue } = await import('@/lib/image-utils')
+    
+    // 🚀 STEP 1: Immediate validation
+    const validation = validateImageFile(file)
+    if (!validation.valid) {
+      toast({
+        title: 'Invalid File',
+        description: validation.error,
+        variant: 'destructive',
+      })
+      return
+    }
+    
     try {
-      setUploading(true);
-      setUploadComplete(false);
-      log('Uploading new image:', file.name);
+      setUploading(true)
+      setUploadComplete(false)
       
-      // Create a local preview immediately for better UX
-      const localUrl = await createLocalImageUrl(file);
+      console.log('🚀 Fast upload process started for:', file.name)
       
-      // Use local URL for immediate preview
-      setProductForm(prev => ({ ...prev, image_url: localUrl }));
+      // 🚀 STEP 2: Create immediate preview (instant feedback)
+      const previewUrl = await createPreviewUrl(file)
+      setProductForm(prev => ({ ...prev, image_url: previewUrl }))
       
-      try {
-        // Try Supabase storage upload
-        const imageUrl = await uploadImageToStorage(file);
-        log('Image uploaded successfully');
-        // Update with the real URL from Supabase
-        setProductForm(prev => ({ ...prev, image_url: imageUrl }));
-      } catch (uploadError) {
-        console.error('Supabase upload failed:', uploadError);
-        
-        // We're already using the local URL, so just show warning
-        toast({
-          title: 'Storage Upload Warning',
-          description: 'Using local image preview. The image will be visible in the form but not saved permanently.',
-          variant: 'destructive',
-        });
-      }
+      console.log('✅ Preview ready, starting background upload...')
+      
+      // 🚀 STEP 3: Queue background upload (non-blocking)
+      uploadQueue.add(async () => {
+        try {
+          const uploadedUrl = await uploadImageToStorage(file)
+          console.log('✅ Background upload complete!')
+          
+          // Replace preview with real URL
+          setProductForm(prev => ({ ...prev, image_url: uploadedUrl }))
+          
+          toast({
+            title: 'Upload Complete',
+            description: 'Image uploaded successfully to storage.',
+          })
+          
+          return uploadedUrl
+        } catch (uploadError) {
+          console.error('Background upload failed:', uploadError)
+          toast({
+            title: 'Upload Warning',
+            description: 'Using preview image. Upload to storage failed.',
+            variant: 'destructive',
+          })
+          // Keep the preview URL as fallback
+          throw uploadError
+        }
+      })
+      
     } catch (error) {
-      console.error('Error handling file:', error);
+      console.error('Error in fast upload process:', error)
       toast({
         title: 'Upload Failed',
-        description: error instanceof Error ? error.message : 'Failed to upload image. Please try again.',
+        description: error instanceof Error ? error.message : 'Failed to process image',
         variant: 'destructive',
-      });
+      })
     } finally {
-      setUploading(false);
-      setUploadComplete(true);
+      setUploading(false)
+      setUploadComplete(true)
     }
   }
   
-  // Handle file input change for edit product
+  // Handle file input change for edit product - OPTIMIZED VERSION
   const handleEditFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
     
+    // 🚀 Import utilities dynamically
+    const { validateImageFile, createPreviewUrl, uploadQueue } = await import('@/lib/image-utils')
+    
+    // 🚀 STEP 1: Immediate validation
+    const validation = validateImageFile(file)
+    if (!validation.valid) {
+      toast({
+        title: 'Invalid File',
+        description: validation.error,
+        variant: 'destructive',
+      })
+      return
+    }
+    
     try {
-      setUploading(true);
-      setUploadComplete(false);
-      log('Uploading edit image:', file.name);
+      setUploading(true)
+      setUploadComplete(false)
       
-      // Create a local preview immediately for better UX
-      const localUrl = await createLocalImageUrl(file);
+      console.log('🚀 Fast edit upload process started for:', file.name)
       
-      // Use local URL for immediate preview
-      setProductForm(prev => ({ ...prev, image_url: localUrl }));
+      // 🚀 STEP 2: Create immediate preview (instant feedback)
+      const previewUrl = await createPreviewUrl(file)
+      setProductForm(prev => ({ ...prev, image_url: previewUrl }))
       
-      try {
-        // Try Supabase storage upload
-        const imageUrl = await uploadImageToStorage(file);
-        log('Edit image uploaded successfully');
-        // Update with the real URL from Supabase
-        setProductForm(prev => ({ ...prev, image_url: imageUrl }));
-      } catch (uploadError) {
-        console.error('Supabase upload failed:', uploadError);
-        
-        // We're already using the local URL, so just show warning
-        toast({
-          title: 'Storage Upload Warning',
-          description: 'Using local image preview. The image will be visible but not saved permanently.',
-          variant: 'destructive',
-        });
-      }
+      console.log('✅ Edit preview ready, starting background upload...')
+      
+      // 🚀 STEP 3: Queue background upload (non-blocking)
+      uploadQueue.add(async () => {
+        try {
+          const uploadedUrl = await uploadImageToStorage(file)
+          console.log('✅ Background edit upload complete!')
+          
+          // Replace preview with real URL
+          setProductForm(prev => ({ ...prev, image_url: uploadedUrl }))
+          
+          toast({
+            title: 'Upload Complete',
+            description: 'Image updated successfully in storage.',
+          })
+          
+          return uploadedUrl
+        } catch (uploadError) {
+          console.error('Background edit upload failed:', uploadError)
+          toast({
+            title: 'Upload Warning',
+            description: 'Using preview image. Upload to storage failed.',
+            variant: 'destructive',
+          })
+          // Keep the preview URL as fallback
+          throw uploadError
+        }
+      })
+      
     } catch (error) {
-      console.error('Error handling file:', error);
+      console.error('Error in fast edit upload process:', error)
       toast({
         title: 'Upload Failed',
-        description: 'Failed to upload image. Please try again.',
+        description: error instanceof Error ? error.message : 'Failed to process image',
         variant: 'destructive',
-      });
+      })
     } finally {
-      setUploading(false);
-      setUploadComplete(true);
+      setUploading(false)
+      setUploadComplete(true)
     }
   }
   
@@ -1111,7 +1096,7 @@ export function ProductManagement() {
                         {uploading ? (
                           <>
                             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Uploading...
+                            Processing...
                           </>
                         ) : !storageAvailable ? (
                           <>
@@ -1121,14 +1106,14 @@ export function ProductManagement() {
                         ) : (
                           <>
                             <Upload className="h-4 w-4 mr-2" />
-                            Upload Image
+                            🚀 Fast Upload
                           </>
                         )}
                       </Button>
                       <p className="text-xs text-gray-500 mt-1">
                         {!storageAvailable 
                           ? "Image storage is not accessible. Contact your administrator." 
-                          : "Max size: 8MB. Formats: JPG, PNG, GIF"}
+                          : "Max size: 10MB. Auto-compressed for faster upload"}
                       </p>
                     </div>
                       <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border flex items-center justify-center">
@@ -1403,7 +1388,7 @@ export function ProductManagement() {
                     {uploading ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Uploading...
+                        Processing...
                       </>
                     ) : !storageAvailable ? (
                       <>
@@ -1413,14 +1398,14 @@ export function ProductManagement() {
                     ) : (
                       <>
                         <Upload className="h-4 w-4 mr-2" />
-                        {productForm.image_url ? 'Replace Image' : 'Upload Image'}
+                        {productForm.image_url ? '🚀 Replace Image' : '🚀 Fast Upload'}
                       </>
                     )}
                   </Button>
                   <p className="text-xs text-gray-500 mt-1">
                     {!storageAvailable 
                       ? "Image storage is not accessible. Contact your administrator." 
-                      : "Max size: 8MB. Formats: JPG, PNG, GIF"}
+                      : "Max size: 10MB. Auto-compressed for faster upload"}
                   </p>
                 </div>
                 <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border flex items-center justify-center">

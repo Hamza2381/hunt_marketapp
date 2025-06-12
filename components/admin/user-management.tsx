@@ -304,6 +304,8 @@ export function UserManagement() {
   const handleCreateUser = async () => {
     try {
       console.log("Creating new user:", createForm.email);
+      console.log("Create form data:", createForm);
+      
       const result = await createUser({
         ...createForm,
         isAdmin: false,
@@ -313,11 +315,12 @@ export function UserManagement() {
         mustChangePassword: true,
       })
 
+      console.log("Create user result:", result);
+
       if (result?.success) {
-        console.log("User created successfully, refreshing user list");
-        await refreshUsers();
+        console.log("User created successfully");
         
-        setIsCreateDialogOpen(false)
+        // Clear the form immediately
         setCreateForm({
           name: "",
           email: "",
@@ -327,18 +330,43 @@ export function UserManagement() {
           creditLimit: 0,
           address: { street: "", city: "", state: "", zipCode: "" },
         })
-
-        // Show the generated password
-        if (result?.user) {
-          setSelectedUser(result.user)
-          setGeneratedPassword(result.password || "")
-          setIsPasswordDialogOpen(true)
-
-          toast({
-            title: "User Created",
-            description: "New user has been created with a temporary password.",
-          })
+        
+        // Add the new user to the local state immediately (optimistic update)
+        if (result.user) {
+          const newUser = {
+            id: result.user.id,
+            name: result.user.name,
+            email: result.user.email,
+            accountType: result.user.accountType,
+            isAdmin: result.user.isAdmin,
+            creditLimit: result.user.creditLimit,
+            creditUsed: result.user.creditUsed,
+            company: result.user.company,
+            phone: result.user.phone,
+            address: result.user.address,
+            temporaryPassword: result.user.temporaryPassword,
+            createdAt: new Date().toISOString()
+          };
+          
+          // Add to users array immediately
+          setUsers(prevUsers => [newUser, ...prevUsers]);
+          
+          // Set for password dialog
+          setSelectedUser(newUser);
+          setGeneratedPassword(result.password || "");
         }
+        
+        // Close dialog and show password
+        setIsCreateDialogOpen(false);
+        setIsPasswordDialogOpen(true);
+
+        toast({
+          title: "User Created",
+          description: "New user has been created with a temporary password.",
+        })
+        
+        // Refresh users list in background to ensure consistency
+        refreshUsers();
       } else {
         console.error("Failed to create user:", result?.error);
         toast({
@@ -536,7 +564,7 @@ export function UserManagement() {
               <div className="bg-blue-50 p-4 rounded-lg">
                 <p className="text-sm text-blue-800">
                   <strong>Note:</strong> A temporary password will be automatically generated for this user. They will
-                  be required to change it on their first login.
+                  be required to change it on their first login. The system will automatically handle any email conflicts.
                 </p>
               </div>
 
