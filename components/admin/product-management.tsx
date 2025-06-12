@@ -1106,7 +1106,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                         ) : (
                           <>
                             <Upload className="h-4 w-4 mr-2" />
-                            🚀 Fast Upload
+                            Fast Upload
                           </>
                         )}
                       </Button>
@@ -1398,7 +1398,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                     ) : (
                       <>
                         <Upload className="h-4 w-4 mr-2" />
-                        {productForm.image_url ? '🚀 Replace Image' : '🚀 Fast Upload'}
+                        {productForm.image_url ? 'Replace Image' : 'Fast Upload'}
                       </>
                     )}
                   </Button>
