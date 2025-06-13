@@ -4,12 +4,16 @@ import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ProductGrid } from "@/components/product-grid"
 import { CategoryFilter } from "@/components/category-filter"
 import { Search, SlidersHorizontal, X } from "lucide-react"
+
+interface Category {
+  id: number
+  name: string
+}
 
 export default function ProductsPage() {
   const searchParams = useSearchParams()
@@ -20,6 +24,14 @@ export default function ProductsPage() {
   const [categoryFilter, setCategoryFilter] = useState(initialCategory)
   const [sortOrder, setSortOrder] = useState("newest")
   const [isFilterOpen, setIsFilterOpen] = useState(false)
+  const [categories, setCategories] = useState<Category[]>([])
+  const [categoriesLoaded, setCategoriesLoaded] = useState(false)
+  
+  // Handle categories loaded from CategoryFilter
+  const handleCategoriesLoaded = (loadedCategories: Category[]) => {
+    setCategories(loadedCategories)
+    setCategoriesLoaded(true)
+  }
   
   // Reset filters
   const handleResetFilters = () => {
@@ -86,7 +98,8 @@ export default function ProductsPage() {
             <h3 className="font-medium text-lg mb-4">Categories</h3>
             <CategoryFilter 
               selectedCategory={categoryFilter} 
-              onSelectCategory={setCategoryFilter} 
+              onSelectCategory={setCategoryFilter}
+              onCategoriesLoaded={handleCategoriesLoaded}
             />
             
             <div className="mt-8">
@@ -114,7 +127,8 @@ export default function ProductsPage() {
               onSelectCategory={(cat) => {
                 setCategoryFilter(cat)
                 setIsFilterOpen(false)
-              }} 
+              }}
+              onCategoriesLoaded={handleCategoriesLoaded}
             />
             
             <div className="mt-8 flex gap-2">
@@ -130,10 +144,12 @@ export default function ProductsPage() {
         
         {/* Products Grid */}
         <div className="flex-1">
+          {/* Pass categories to ProductGrid immediately, even if still loading */}
           <ProductGrid 
             searchQuery={searchQuery}
             categoryFilter={categoryFilter}
             sortOrder={sortOrder}
+            categories={categories}
           />
         </div>
       </div>

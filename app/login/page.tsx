@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Building2, User, Eye, EyeOff, AlertCircle } from "lucide-react"
+import { Eye, EyeOff, AlertCircle } from "lucide-react"
 import { useAuth } from "@/hooks/use-auth"
 import { useToast } from "@/hooks/use-toast"
 import Link from "next/link"
@@ -39,12 +39,10 @@ export default function LoginPage() {
           description: "Welcome back! You have been successfully logged in.",
         })
 
-        // Redirect based on user type
-        if (email.toLowerCase() === "admin@bizmart.com") {
-          router.push("/admin")
-        } else {
+        // Small delay to allow user profile to load, then redirect based on user type
+        setTimeout(() => {
           router.push("/")
-        }
+        }, 100)
       } else {
         setError(result.error || "Login failed")
       }
@@ -53,50 +51,6 @@ export default function LoginPage() {
     } finally {
       setIsLoading(false)
     }
-  }
-
-  const testAccounts = [
-    {
-      email: "admin@bizmart.com",
-      password: "admin123",
-      name: "Admin User",
-      type: "Admin Account",
-      icon: Building2,
-      description: "Full admin access to manage users and products",
-      color: "bg-red-100 text-red-800 border-red-200",
-    },
-    {
-      email: "john@company.com",
-      password: "user123",
-      name: "John Doe",
-      type: "Business Account",
-      icon: Building2,
-      description: "Business user with $5,000 credit line",
-      color: "bg-blue-100 text-blue-800 border-blue-200",
-    },
-    {
-      email: "jane@personal.com",
-      password: "user123",
-      name: "Jane Smith",
-      type: "Personal Account",
-      icon: User,
-      description: "Personal user with $1,500 credit line",
-      color: "bg-green-100 text-green-800 border-green-200",
-    },
-    {
-      email: "bob@smallbiz.com",
-      password: "temp2024",
-      name: "Bob Wilson",
-      type: "Temporary Password",
-      icon: Building2,
-      description: "Business account with temporary password (requires change)",
-      color: "bg-orange-100 text-orange-800 border-orange-200",
-    },
-  ]
-
-  const handleTestLogin = (testEmail: string, testPassword: string) => {
-    setEmail(testEmail)
-    setPassword(testPassword)
   }
 
   return (
@@ -116,7 +70,7 @@ export default function LoginPage() {
           </div>
           <h2 className="mt-6 text-3xl font-bold text-gray-900">Sign in to BizMart</h2>
           <p className="mt-2 text-sm text-gray-600">
-            Access your account with credentials provided by your administrator
+            Enter your email address and password to access your account
           </p>
         </div>
 

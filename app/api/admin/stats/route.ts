@@ -15,86 +15,59 @@ const supabaseAdmin = createClient(
 
 export async function GET(request: NextRequest) {
   try {
-    console.log('Admin: Fetching dashboard statistics...');
-    
-    // Fetch user count using admin client
-    const { count: userCount, error: userError } = await supabaseAdmin
-      .from('user_profiles')
-      .select('*', { count: 'exact', head: true });
-    
-    if (userError) {
-      console.error('Error fetching user count:', userError);
-    }
-    
-    // Fetch active users (logged in the last 30 days)
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const thirtyDaysAgoStr = thirtyDaysAgo.toISOString();
-    
-    const { count: activeUserCount, error: activeUserError } = await supabaseAdmin
-      .from('user_profiles')
-      .select('*', { count: 'exact', head: true })
-      .gte('last_login', thirtyDaysAgoStr);
-    
-    if (activeUserError) {
-      console.error('Error fetching active user count:', activeUserError);
-    }
-    
-    // Fetch product count using admin client
-    const { count: productCount, error: productError } = await supabaseAdmin
-      .from('products')
-      .select('*', { count: 'exact', head: true });
-    
-    if (productError) {
-      console.error('Error fetching product count:', productError);
-    }
-    
-    // Fetch order count using admin client (this should now work correctly)
-    const { count: orderCount, error: orderError } = await supabaseAdmin
-      .from('orders')
-      .select('*', { count: 'exact', head: true });
-    
-    if (orderError) {
-      console.error('Error fetching order count:', orderError);
-    }
-    
-    console.log('Raw counts:', { userCount, productCount, orderCount });
-    
-    // Fetch total revenue using admin client
-    const { data: revenueData, error: revenueError } = await supabaseAdmin
-      .from('orders')
-      .select('total_amount');
-    
-    if (revenueError) {
-      console.error('Error fetching revenue data:', revenueError);
-    }
-    
-    const totalRevenue = revenueData?.reduce((sum, order) => sum + (order.total_amount || 0), 0) || 0;
-    
-    // Fetch last month's revenue for growth calculation
+    // Calculate date ranges once
     const now = new Date();
-    const firstDayThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const firstDayTwoMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const firstDayThisMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const firstDayLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
     
-    const { data: thisMonthData, error: thisMonthError } = await supabaseAdmin
-      .from('orders')
-      .select('total_amount')
-      .gte('created_at', firstDayThisMonth.toISOString());
+    // Execute all queries in parallel for maximum speed
+    const [
+      { count: userCount },
+      { count: activeUserCount },
+      { count: productCount },
+      { count: orderCount },
+      { data: revenueData },
+      { data: adjustmentsData },
+      { data: thisMonthData },
+      { data: lastMonthData }
+    ] = await Promise.all([
+      // Total users
+      supabaseAdmin.from('user_profiles').select('*', { count: 'exact', head: true }),
+      
+      // Active users (last 30 days)
+      supabaseAdmin.from('user_profiles').select('*', { count: 'exact', head: true }).gte('last_login', thirtyDaysAgo),
+      
+      // Total products
+      supabaseAdmin.from('products').select('*', { count: 'exact', head: true }),
+      
+      // Total orders
+      supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }),
+      
+      // Total revenue
+      supabaseAdmin.from('orders').select('total_amount'),
+      
+      // Revenue adjustments
+      supabaseAdmin.from('revenue_adjustments').select('amount, adjustment_type'),
+      
+      // This month revenue
+      supabaseAdmin.from('orders').select('total_amount').gte('created_at', firstDayThisMonth),
+      
+      // Last month revenue
+      supabaseAdmin.from('orders').select('total_amount')
+        .gte('created_at', firstDayLastMonth)
+        .lt('created_at', firstDayThisMonth)
+    ]);
     
-    const { data: lastMonthData, error: lastMonthError } = await supabaseAdmin
-      .from('orders')
-      .select('total_amount')
-      .gte('created_at', firstDayLastMonth.toISOString())
-      .lt('created_at', firstDayThisMonth.toISOString());
+    // Calculate totals efficiently
+    const baseRevenue = revenueData?.reduce((sum, order) => sum + (order.total_amount || 0), 0) || 0;
     
-    if (thisMonthError) {
-      console.error('Error fetching this month revenue:', thisMonthError);
-    }
-    if (lastMonthError) {
-      console.error('Error fetching last month revenue:', lastMonthError);
-    }
+    // Calculate revenue adjustments (positive adjustments add to revenue, negative reduce it)
+    const revenueAdjustments = adjustmentsData?.reduce((sum, adj) => {
+      return sum + (adj.adjustment_type === 'add' ? (adj.amount || 0) : -(adj.amount || 0));
+    }, 0) || 0;
     
+    const totalRevenue = baseRevenue + revenueAdjustments;
     const thisMonthRevenue = thisMonthData?.reduce((sum, order) => sum + (order.total_amount || 0), 0) || 0;
     const lastMonthRevenue = lastMonthData?.reduce((sum, order) => sum + (order.total_amount || 0), 0) || 0;
     
@@ -110,20 +83,15 @@ export async function GET(request: NextRequest) {
       totalRevenue: totalRevenue,
       monthlyGrowth: parseFloat(growthPercentage.toFixed(1)),
       activeUsers: activeUserCount || 0,
-      thisMonthOrders: thisMonthData?.length || 0,
-      lastMonthOrders: lastMonthData?.length || 0,
     };
-    
-    console.log('Admin stats calculated:', stats);
     
     return NextResponse.json({ 
       success: true,
       stats: stats
     });
   } catch (error) {
-    console.error('Admin stats API error:', error);
     return NextResponse.json({ 
-      error: error.message || 'An unexpected error occurred',
+      error: 'Failed to fetch stats',
       stats: {
         totalUsers: 0,
         totalProducts: 0,

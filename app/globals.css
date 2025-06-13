@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Import image upload performance optimizations */
+@import '../styles/image-upload-optimizations.css';
+
 /* Real-time stats update animation */
 @keyframes pulse-once {
   0% {

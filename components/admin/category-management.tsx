@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -18,20 +18,32 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Plus, Edit, Trash2, FolderOpen, Loader2, AlertTriangle, Search, RefreshCw } from "lucide-react"
-import { supabase } from "@/lib/supabase-client"
 import { useToast } from "@/hooks/use-toast"
-import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import type { Category } from "@/lib/supabase"
+import { supabase } from "@/lib/supabase-client"
+import { AdminCache } from "@/lib/admin-cache"
+
+interface Category {
+  id: number
+  name: string
+  description?: string
+  status: "active" | "inactive"
+  created_at: string
+  productCount: number
+}
+
+const CACHE_KEY = 'admin-categories'
 
 export function CategoryManagement() {
-  const [categories, setCategories] = useState<(Category & { productCount: number })[]>([])
+  const [categories, setCategories] = useState<Category[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isAddCategoryOpen, setIsAddCategoryOpen] = useState(false)
   const [isEditCategoryOpen, setIsEditCategoryOpen] = useState(false)
-  const [selectedCategory, setSelectedCategory] = useState<(Category & { productCount: number }) | null>(null)
+  const [selectedCategory, setSelectedCategory] = useState<Category | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isOperating, setIsOperating] = useState(false)
   const { toast } = useToast()
   
   const [categoryForm, setCategoryForm] = useState({
@@ -40,110 +52,190 @@ export function CategoryManagement() {
     status: "active" as "active" | "inactive",
   })
 
-  // Function to refresh categories data
-  const refreshCategories = async () => {
+  // Optimized category fetching with caching (same pattern as users)
+  const fetchCategories = useCallback(async (forceRefresh = false) => {
+    // Check cache first unless force refresh
+    if (!AdminCache.shouldRefresh<Category[]>(CACHE_KEY, forceRefresh)) {
+      const cached = AdminCache.get<Category[]>(CACHE_KEY)
+      if (cached.data) {
+        setCategories(cached.data)
+        setIsLoading(false)
+        return
+      }
+    }
+    
+    // Prevent multiple simultaneous requests
+    if (AdminCache.get(CACHE_KEY).isLoading && !forceRefresh) {
+      return
+    }
+    
+    AdminCache.setLoading(CACHE_KEY, true)
     setIsLoading(true)
     setError(null)
+    
     try {
-      // Fetch categories
-      const { data: categoriesData, error: categoriesError } = await supabase
-        .from('categories')
-        .select('*')
-        .order('name')
+      console.log('Fetching categories...')
       
-      if (categoriesError) throw categoriesError
+      // Fetch categories with product counts in parallel
+      const [categoriesResponse, productsResponse] = await Promise.all([
+        supabase.from('categories').select('*').order('name'),
+        supabase.from('products').select('id, category_id')
+      ])
       
-      // Get product counts for each category
-      const categoriesWithCounts = await Promise.all(categoriesData.map(async (category) => {
-        const { count } = await supabase
-          .from('products')
-          .select('*', { count: 'exact', head: true })
-          .eq('category_id', category.id)
-        
-        return {
-          ...category,
-          productCount: count || 0
-        }
+      if (categoriesResponse.error) {
+        throw new Error(categoriesResponse.error.message)
+      }
+      
+      const categoriesData = categoriesResponse.data || []
+      const productsData = productsResponse.data || []
+      
+      // Count products per category efficiently
+      const productCounts = productsData.reduce((acc, product) => {
+        acc[product.category_id] = (acc[product.category_id] || 0) + 1
+        return acc
+      }, {} as Record<number, number>)
+      
+      const categoriesWithCounts = categoriesData.map(category => ({
+        ...category,
+        productCount: productCounts[category.id] || 0
       }))
       
-      setCategories(categoriesWithCounts || [])
+      console.log(`Loaded ${categoriesWithCounts.length} categories`)
+      
+      // Update cache and state
+      AdminCache.set(CACHE_KEY, categoriesWithCounts)
+      setCategories(categoriesWithCounts)
+      
     } catch (err: any) {
-      console.error('Error fetching categories:', err.message)
-      setError('Failed to load categories. Please try again.')
+      console.error('Error fetching categories:', err)
+      setError(err.message || 'Failed to load categories')
+      setCategories([])
+      
       toast({
-        title: 'Error',
-        description: 'Failed to load categories data.',
+        title: 'Error Loading Categories',
+        description: err.message || 'Failed to load categories. Please try again.',
         variant: 'destructive',
       })
     } finally {
+      AdminCache.setLoading(CACHE_KEY, false)
       setIsLoading(false)
     }
-  }
+  }, [toast])
   
-  // Fetch categories on component mount
+  // Initial load
   useEffect(() => {
-    refreshCategories()
-  }, [])
+    fetchCategories()
+  }, [fetchCategories])
 
-  const filteredCategories = categories.filter((category) => 
-    category.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (category.description && category.description.toLowerCase().includes(searchTerm.toLowerCase()))
+  // Manual refresh
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true)
+    await fetchCategories(true)
+    setIsRefreshing(false)
+  }, [fetchCategories])
+
+  // Memoized filtered categories
+  const filteredCategories = useMemo(() => 
+    categories.filter((category) => 
+      category.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (category.description && category.description.toLowerCase().includes(searchTerm.toLowerCase()))
+    ), [categories, searchTerm]
   )
 
+  const resetForm = useCallback(() => {
+    setCategoryForm({
+      name: "",
+      description: "",
+      status: "active",
+    })
+  }, [])
+
   const handleAddCategory = async () => {
+    if (isOperating) return
+    
+    if (!categoryForm.name.trim()) {
+      toast({
+        title: 'Validation Error',
+        description: 'Category name is required.',
+        variant: 'destructive',
+      })
+      return
+    }
+    
     try {
-      // Validate form
-      if (!categoryForm.name) {
-        toast({
-          title: 'Validation Error',
-          description: 'Category name is required.',
-          variant: 'destructive',
-        })
-        return
+      setIsOperating(true)
+      console.log("Adding new category:", categoryForm.name)
+      
+      // Create optimistic category for immediate UI update
+      const optimisticCategory: Category = {
+        id: Date.now(), // Temporary ID
+        name: categoryForm.name.trim(),
+        description: categoryForm.description.trim() || undefined,
+        status: categoryForm.status,
+        created_at: new Date().toISOString(),
+        productCount: 0
       }
       
-      console.log("Adding new category:", categoryForm.name);
+      // Immediate UI update
+      setCategories(prev => [optimisticCategory, ...prev])
+      setIsAddCategoryOpen(false)
+      const addedCategoryName = categoryForm.name
+      resetForm()
       
-      // Insert new category
+      // Show immediate success
+      toast({
+        title: 'Category Added',
+        description: `${addedCategoryName} has been added successfully.`,
+      })
+      
+      // Background database operation
       const { data, error } = await supabase
         .from('categories')
         .insert([{
-          name: categoryForm.name,
-          description: categoryForm.description || null,
-          status: categoryForm.status,
+          name: optimisticCategory.name,
+          description: optimisticCategory.description || null,
+          status: optimisticCategory.status,
         }])
         .select()
+        .single()
       
       if (error) {
-        console.error("Error inserting category:", error);
-        throw error;
+        throw new Error(error.message)
       }
       
-      console.log("Category added successfully, refreshing list");
-      // Refresh categories
-      await refreshCategories()
-      setIsAddCategoryOpen(false)
-      setCategoryForm({
-        name: "",
-        description: "",
-        status: "active",
-      })
+      // Replace optimistic category with real one
+      const realCategory = { ...data, productCount: 0 }
+      setCategories(prev => prev.map(cat => 
+        cat.id === optimisticCategory.id ? realCategory : cat
+      ))
+      
+      // Update cache
+      AdminCache.set(CACHE_KEY, categories.map(cat => 
+        cat.id === optimisticCategory.id ? realCategory : cat
+      ))
+      
+      // Refresh admin stats after successful category addition
+      if (typeof window !== 'undefined' && window.refreshAdminStats) {
+        window.refreshAdminStats()
+      }
+      
+    } catch (err: any) {
+      console.error('Error adding category:', err)
+      
+      // Rollback optimistic update
+      setCategories(prev => prev.filter(cat => cat.id !== Date.now()))
       
       toast({
-        title: 'Category Added',
-        description: `${categoryForm.name} has been added successfully.`,
-      })
-    } catch (err: any) {
-      console.error('Error adding category:', err.message)
-      toast({
         title: 'Error',
-        description: 'Failed to add category. ' + err.message,
+        description: err.message || 'Failed to add category',
         variant: 'destructive',
       })
+    } finally {
+      setIsOperating(false)
     }
   }
   
-  const handleEditCategory = (category: Category & { productCount: number }) => {
+  const handleEditCategory = (category: Category) => {
     setSelectedCategory(category)
     setCategoryForm({
       name: category.name,
@@ -154,59 +246,85 @@ export function CategoryManagement() {
   }
   
   const handleUpdateCategory = async () => {
-    if (!selectedCategory) return
+    if (!selectedCategory || isOperating) return
+    
+    if (!categoryForm.name.trim()) {
+      toast({
+        title: 'Validation Error',
+        description: 'Category name is required.',
+        variant: 'destructive',
+      })
+      return
+    }
     
     try {
-      // Validate form
-      if (!categoryForm.name) {
-        toast({
-          title: 'Validation Error',
-          description: 'Category name is required.',
-          variant: 'destructive',
-        })
-        return
+      setIsOperating(true)
+      console.log("Updating category:", selectedCategory.id)
+      
+      // Create updated category for optimistic update
+      const updatedCategory: Category = {
+        ...selectedCategory,
+        name: categoryForm.name.trim(),
+        description: categoryForm.description.trim() || undefined,
+        status: categoryForm.status,
       }
       
-      console.log("Updating category:", selectedCategory.id, categoryForm.name);
+      // Immediate UI update
+      setCategories(prev => prev.map(cat => 
+        cat.id === selectedCategory.id ? updatedCategory : cat
+      ))
       
-      // Update category
+      const updatedCategoryName = categoryForm.name
+      setIsEditCategoryOpen(false)
+      setSelectedCategory(null)
+      resetForm()
+      
+      // Show immediate success
+      toast({
+        title: 'Category Updated',
+        description: `${updatedCategoryName} has been updated successfully.`,
+      })
+      
+      // Background database operation
       const { error } = await supabase
         .from('categories')
         .update({
-          name: categoryForm.name,
-          description: categoryForm.description || null,
-          status: categoryForm.status,
+          name: updatedCategory.name,
+          description: updatedCategory.description || null,
+          status: updatedCategory.status,
         })
         .eq('id', selectedCategory.id)
       
       if (error) {
-        console.error("Error updating category:", error);
-        throw error;
+        throw new Error(error.message)
       }
       
-      console.log("Category updated successfully, refreshing list");
-      // Refresh categories
-      await refreshCategories()
+      // Update cache
+      AdminCache.set(CACHE_KEY, categories.map(cat => 
+        cat.id === selectedCategory.id ? updatedCategory : cat
+      ))
       
-      setIsEditCategoryOpen(false)
-      setSelectedCategory(null)
-      
-      toast({
-        title: 'Category Updated',
-        description: `${categoryForm.name} has been updated successfully.`,
-      })
     } catch (err: any) {
-      console.error('Error updating category:', err.message)
+      console.error('Error updating category:', err)
+      
+      // Rollback optimistic update
+      setCategories(prev => prev.map(cat => 
+        cat.id === selectedCategory.id ? selectedCategory : cat
+      ))
+      
       toast({
         title: 'Error',
-        description: 'Failed to update category. ' + err.message,
+        description: err.message || 'Failed to update category',
         variant: 'destructive',
       })
+    } finally {
+      setIsOperating(false)
     }
   }
   
-  const handleDeleteCategory = async (category: Category & { productCount: number }) => {
-    // Check if there are products in this category
+  const handleDeleteCategory = async (category: Category) => {
+    if (isOperating) return
+    
     if (category.productCount > 0) {
       toast({
         title: 'Cannot Delete',
@@ -219,34 +337,67 @@ export function CategoryManagement() {
     if (!confirm(`Are you sure you want to delete ${category.name}?`)) return
     
     try {
-      console.log("Deleting category:", category.id, category.name);
+      setIsOperating(true)
+      console.log("Deleting category:", category.id)
       
+      // Optimistic removal
+      setCategories(prev => prev.filter(cat => cat.id !== category.id))
+      
+      toast({
+        title: 'Category Deleted',
+        description: `${category.name} has been deleted successfully.`,
+      })
+      
+      // Background database operation
       const { error } = await supabase
         .from('categories')
         .delete()
         .eq('id', category.id)
       
       if (error) {
-        console.error("Error deleting category:", error);
-        throw error;
+        throw new Error(error.message)
       }
       
-      console.log("Category deleted successfully, refreshing list");
-      // Refresh categories
-      await refreshCategories()
+      // Update cache
+      const updatedCategories = categories.filter(cat => cat.id !== category.id)
+      AdminCache.set(CACHE_KEY, updatedCategories)
+      
+      // Refresh admin stats after successful category deletion
+      if (typeof window !== 'undefined' && window.refreshAdminStats) {
+        window.refreshAdminStats()
+      }
+      
+    } catch (err: any) {
+      console.error('Error deleting category:', err)
+      
+      // Rollback - add category back
+      setCategories(prev => [...prev, category].sort((a, b) => a.name.localeCompare(b.name)))
       
       toast({
-        title: 'Category Deleted',
-        description: `${category.name} has been deleted successfully.`,
-      })
-    } catch (err: any) {
-      console.error('Error deleting category:', err.message)
-      toast({
         title: 'Error',
-        description: 'Failed to delete category. ' + err.message,
+        description: err.message || 'Failed to delete category',
         variant: 'destructive',
       })
+    } finally {
+      setIsOperating(false)
     }
+  }
+
+  if (isLoading && categories.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Category Management</CardTitle>
+          <CardDescription>Organize your products into categories</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="py-12 text-center">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+            <p className="text-sm text-gray-500">Loading categories...</p>
+          </div>
+        </CardContent>
+      </Card>
+    )
   }
 
   return (
@@ -259,7 +410,7 @@ export function CategoryManagement() {
           </div>
           <Dialog open={isAddCategoryOpen} onOpenChange={setIsAddCategoryOpen}>
             <DialogTrigger asChild>
-              <Button>
+              <Button disabled={isOperating}>
                 <Plus className="h-4 w-4 mr-2" />
                 Add Category
               </Button>
@@ -276,6 +427,8 @@ export function CategoryManagement() {
                     id="categoryName"
                     value={categoryForm.name}
                     onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })}
+                    placeholder="Enter category name"
+                    disabled={isOperating}
                   />
                 </div>
                 <div className="grid gap-2">
@@ -284,15 +437,17 @@ export function CategoryManagement() {
                     id="categoryDescription"
                     value={categoryForm.description}
                     onChange={(e) => setCategoryForm({ ...categoryForm, description: e.target.value })}
+                    placeholder="Optional description"
                     rows={3}
+                    disabled={isOperating}
                   />
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="categoryStatus">Status</Label>
                   <Select
-                    id="categoryStatus"
                     value={categoryForm.status}
                     onValueChange={(value) => setCategoryForm({ ...categoryForm, status: value as 'active' | 'inactive' })}
+                    disabled={isOperating}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -305,8 +460,15 @@ export function CategoryManagement() {
                 </div>
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setIsAddCategoryOpen(false)}>Cancel</Button>
-                <Button onClick={handleAddCategory}>Add Category</Button>
+                <Button variant="outline" onClick={() => {
+                  setIsAddCategoryOpen(false)
+                  resetForm()
+                }} disabled={isOperating}>
+                  Cancel
+                </Button>
+                <Button onClick={handleAddCategory} disabled={isOperating}>
+                  {isOperating ? 'Adding...' : 'Add Category'}
+                </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -321,32 +483,34 @@ export function CategoryManagement() {
             onChange={(e) => setSearchTerm(e.target.value)}
             className="max-w-sm"
           />
-          <Button variant="outline" onClick={refreshCategories} title="Refresh categories">
-            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          <Button 
+            variant="outline" 
+            onClick={handleRefresh} 
+            disabled={isRefreshing || isOperating}
+            title="Refresh categories"
+          >
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
           </Button>
         </div>
         
-        {isLoading ? (
+        {error ? (
           <div className="py-8 text-center">
-            <Loader2 className="h-8 w-8 animate-spin mx-auto" />
-            <p className="text-sm text-gray-500 mt-2">Loading categories...</p>
-          </div>
-        ) : error ? (
-          <div className="py-8 text-center">
-            <AlertTriangle className="h-8 w-8 text-red-500 mx-auto" />
-            <p className="text-sm text-red-500 mt-2">{error}</p>
-            <Button variant="outline" size="sm" className="mt-4" onClick={refreshCategories}>
+            <AlertTriangle className="h-8 w-8 text-red-500 mx-auto mb-2" />
+            <p className="text-sm text-red-500 mb-4">{error}</p>
+            <Button variant="outline" size="sm" onClick={handleRefresh}>
               Try Again
             </Button>
           </div>
         ) : filteredCategories.length === 0 ? (
           <div className="py-8 text-center border rounded-md">
-            <FolderOpen className="h-8 w-8 text-gray-400 mx-auto" />
-            <p className="text-sm text-gray-500 mt-2">
+            <FolderOpen className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+            <p className="text-sm text-gray-500 mb-4">
               {searchTerm ? "No categories found matching your search" : "No categories available"}
             </p>
             {searchTerm && (
-              <Button variant="outline" size="sm" className="mt-4" onClick={() => setSearchTerm("")}>Clear Search</Button>
+              <Button variant="outline" size="sm" onClick={() => setSearchTerm("")}>
+                Clear Search
+              </Button>
             )}
           </div>
         ) : (
@@ -372,20 +536,34 @@ export function CategoryManagement() {
                     </div>
                   </TableCell>
                   <TableCell className="max-w-md">
-                    <p className="text-sm text-gray-600 line-clamp-2">{category.description}</p>
+                    <p className="text-sm text-gray-600 line-clamp-2">
+                      {category.description || 'No description'}
+                    </p>
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline">{category.productCount} products</Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={category.status === "active" ? "default" : "secondary"}>{category.status}</Badge>
+                    <Badge variant={category.status === "active" ? "default" : "secondary"}>
+                      {category.status}
+                    </Badge>
                   </TableCell>
                   <TableCell>
                     <div className="flex space-x-2">
-                      <Button size="sm" variant="outline" onClick={() => handleEditCategory(category)}>
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        onClick={() => handleEditCategory(category)}
+                        disabled={isOperating}
+                      >
                         <Edit className="h-4 w-4" />
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => handleDeleteCategory(category)}>
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        onClick={() => handleDeleteCategory(category)}
+                        disabled={category.productCount > 0 || isOperating}
+                      >
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
@@ -411,6 +589,7 @@ export function CategoryManagement() {
                 id="editCategoryName"
                 value={categoryForm.name}
                 onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })}
+                disabled={isOperating}
               />
             </div>
             <div className="grid gap-2">
@@ -420,14 +599,15 @@ export function CategoryManagement() {
                 value={categoryForm.description}
                 onChange={(e) => setCategoryForm({ ...categoryForm, description: e.target.value })}
                 rows={3}
+                disabled={isOperating}
               />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="editCategoryStatus">Status</Label>
               <Select
-                id="editCategoryStatus"
                 value={categoryForm.status}
                 onValueChange={(value) => setCategoryForm({ ...categoryForm, status: value as 'active' | 'inactive' })}
+                disabled={isOperating}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -447,8 +627,16 @@ export function CategoryManagement() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsEditCategoryOpen(false)}>Cancel</Button>
-            <Button onClick={handleUpdateCategory}>Save Changes</Button>
+            <Button variant="outline" onClick={() => {
+              setIsEditCategoryOpen(false)
+              setSelectedCategory(null)
+              resetForm()
+            }} disabled={isOperating}>
+              Cancel
+            </Button>
+            <Button onClick={handleUpdateCategory} disabled={isOperating}>
+              {isOperating ? 'Saving...' : 'Save Changes'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

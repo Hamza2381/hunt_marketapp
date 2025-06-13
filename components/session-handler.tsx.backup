@@ -1,0 +1,47 @@
+"use client"
+
+import { useEffect } from 'react'
+import { SessionManager } from '@/lib/session-manager'
+import { useAuth } from '@/hooks/use-auth'
+import { usePathname } from 'next/navigation'
+
+export function SessionHandler() {
+  const { user, isAuthenticated } = useAuth()
+  const pathname = usePathname()
+
+  // Update session state when auth or route changes
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      SessionManager.saveAppState({
+        isAuthenticated: true,
+        userEmail: user.email,
+        currentPath: pathname,
+        timestamp: Date.now()
+      })
+    } else if (!isAuthenticated) {
+      // Only clear if truly logged out, not during loading
+      const savedState = SessionManager.loadAppState()
+      if (savedState && savedState.isAuthenticated) {
+        // Keep state temporarily in case this is just a tab switch
+        SessionManager.saveAppState({
+          ...savedState,
+          timestamp: Date.now()
+        })
+      }
+    }
+  }, [isAuthenticated, user, pathname])
+
+  // Handle browser tab visibility changes
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        SessionManager.updateActivity()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
+
+  return null // This component doesn't render anything
+}

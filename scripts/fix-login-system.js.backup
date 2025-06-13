@@ -1,0 +1,272 @@
+#!/usr/bin/env node
+
+// All-in-one login diagnostics and repair tool
+// Run with: node scripts/fix-login-system.js
+
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config({ path: '.env.local' });
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseServiceKey || !supabaseAnonKey) {
+  console.error('❌ Missing required environment variables');
+  process.exit(1);
+}
+
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+});
+
+const supabaseClient = createClient(supabaseUrl, supabaseAnonKey);
+
+// Test users that should exist
+const expectedUsers = [
+  { email: 'admin@bizmart.com', password: 'admin123', name: 'Admin User', type: 'business', isAdmin: true },
+  { email: 'john@company.com', password: 'user123', name: 'John Doe', type: 'business', isAdmin: false },
+  { email: 'jane@personal.com', password: 'user123', name: 'Jane Smith', type: 'personal', isAdmin: false },
+  { email: 'bob@smallbiz.com', password: 'temp2024', name: 'Bob Wilson', type: 'business', isAdmin: false }
+];
+
+async function diagnose() {
+  console.log('🔍 DIAGNOSING LOGIN SYSTEM...\n');
+  
+  const issues = [];
+  const workingUsers = [];
+  
+  // Check database connection
+  try {
+    const { data, error } = await supabaseAdmin.from('user_profiles').select('count').limit(1);
+    if (error) throw error;
+    console.log('✅ Database connection working');
+  } catch (error) {
+    console.log('❌ Database connection failed:', error.message);
+    issues.push('database_connection');
+  }
+  
+  // Check user profiles
+  const { data: profiles, error: profilesError } = await supabaseAdmin
+    .from('user_profiles')
+    .select('id, email, name, status')
+    .eq('status', 'active');
+    
+  if (profilesError) {
+    console.log('❌ Cannot query user profiles:', profilesError.message);
+    issues.push('profile_query');
+  } else {
+    console.log(`✅ Found ${profiles.length} active user profiles`);
+    
+    // Check each expected user
+    for (const expectedUser of expectedUsers) {
+      const profile = profiles.find(p => p.email === expectedUser.email);
+      
+      if (!profile) {
+        console.log(`❌ Missing user: ${expectedUser.email}`);
+        issues.push(`missing_user_${expectedUser.email}`);
+        continue;
+      }
+      
+      // Check if auth user exists
+      try {
+        const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.getUserById(profile.id);
+        
+        if (authError || !authUser.user) {
+          console.log(`❌ No auth user for ${expectedUser.email}`);
+          issues.push(`missing_auth_${expectedUser.email}`);
+          continue;
+        }
+        
+        // Test password
+        try {
+          const { data: signInData, error: signInError } = await supabaseClient.auth.signInWithPassword({
+            email: authUser.user.email,
+            password: expectedUser.password
+          });
+          
+          if (signInError) {
+            console.log(`❌ Password failed for ${expectedUser.email}: ${signInError.message}`);
+            issues.push(`password_failed_${expectedUser.email}`);
+          } else {
+            console.log(`✅ Login working: ${expectedUser.email}`);
+            workingUsers.push(expectedUser.email);
+            await supabaseClient.auth.signOut(); // Clean up
+          }
+          
+        } catch (passwordError) {
+          console.log(`❌ Password test error for ${expectedUser.email}: ${passwordError.message}`);
+          issues.push(`password_error_${expectedUser.email}`);
+        }
+        
+      } catch (authError) {
+        console.log(`❌ Auth lookup failed for ${expectedUser.email}: ${authError.message}`);
+        issues.push(`auth_lookup_${expectedUser.email}`);
+      }
+    }
+  }
+  
+  return { issues, workingUsers };
+}
+
+async function createUser(userData) {
+  const { email, password, name, type, isAdmin } = userData;
+  
+  try {
+    // Clean up existing
+    await supabaseAdmin.from('user_profiles').delete().eq('email', email);
+    
+    // Create auth user
+    const timestamp = Date.now();
+    const randomId = Math.random().toString(36).substr(2, 9);
+    const authEmail = `user_${timestamp}_${randomId}@auth.internal`;
+    
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+      email: authEmail,
+      password: password,
+      email_confirm: true,
+    });
+    
+    if (authError) throw authError;
+    
+    // Create profile
+    const profileData = {
+      id: authData.user.id,
+      name: name,
+      email: email,
+      account_type: type,
+      company_name: type === 'business' ? name.split(' ')[0] + ' Corp' : null,
+      is_admin: isAdmin,
+      credit_limit: type === 'personal' ? 1500 : 5000,
+      credit_used: 0,
+      status: 'active'
+    };
+    
+    const { error: profileError } = await supabaseAdmin
+      .from('user_profiles')
+      .insert(profileData);
+      
+    if (profileError) {
+      await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
+      throw profileError;
+    }
+    
+    return true;
+    
+  } catch (error) {
+    console.log(`❌ Failed to create ${email}: ${error.message}`);
+    return false;
+  }
+}
+
+async function repair(issues) {
+  console.log('\n🔧 REPAIRING LOGIN SYSTEM...\n');
+  
+  let repaired = 0;
+  
+  for (const expectedUser of expectedUsers) {
+    const hasIssue = issues.some(issue => 
+      issue.includes(expectedUser.email) || 
+      issue === `missing_user_${expectedUser.email}`
+    );
+    
+    if (hasIssue) {
+      console.log(`Recreating user: ${expectedUser.email}`);
+      const success = await createUser(expectedUser);
+      if (success) {
+        console.log(`✅ Recreated ${expectedUser.email}`);
+        repaired++;
+      }
+    }
+  }
+  
+  return repaired;
+}
+
+async function testLogin(email, password) {
+  try {
+    // Test the complete login flow
+    const { data: profile } = await supabaseAdmin
+      .from('user_profiles')
+      .select('id, email, name')
+      .eq('email', email)
+      .eq('status', 'active')
+      .single();
+      
+    if (!profile) return false;
+    
+    const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(profile.id);
+    if (!authUser.user) return false;
+    
+    const { data: signInData, error: signInError } = await supabaseClient.auth.signInWithPassword({
+      email: authUser.user.email,
+      password: password
+    });
+    
+    if (signInError) return false;
+    
+    await supabaseClient.auth.signOut();
+    return true;
+    
+  } catch (error) {
+    return false;
+  }
+}
+
+async function main() {
+  console.log('🚀 LOGIN SYSTEM DIAGNOSTIC AND REPAIR TOOL\n');
+  
+  // Step 1: Diagnose
+  const { issues, workingUsers } = await diagnose();
+  
+  console.log(`\n📊 DIAGNOSIS RESULTS:`);
+  console.log(`Issues found: ${issues.length}`);
+  console.log(`Working users: ${workingUsers.length}`);
+  
+  if (issues.length === 0) {
+    console.log('\n✅ LOGIN SYSTEM IS HEALTHY!');
+    console.log('\nWorking test credentials:');
+    for (const user of expectedUsers) {
+      if (workingUsers.includes(user.email)) {
+        console.log(`  ${user.email} / ${user.password}`);
+      }
+    }
+    return;
+  }
+  
+  // Step 2: Repair if needed
+  console.log('\n🔧 Issues detected, attempting repair...');
+  const repaired = await repair(issues);
+  
+  if (repaired > 0) {
+    console.log(`\n✅ Repaired ${repaired} users. Testing login system...`);
+    
+    // Step 3: Verify repairs
+    let verified = 0;
+    for (const user of expectedUsers) {
+      const works = await testLogin(user.email, user.password);
+      if (works) {
+        verified++;
+      }
+    }
+    
+    console.log(`\n🎉 REPAIR COMPLETE!`);
+    console.log(`Verified working logins: ${verified}/${expectedUsers.length}`);
+    
+    if (verified > 0) {
+      console.log('\n✅ WORKING TEST CREDENTIALS:');
+      for (const user of expectedUsers) {
+        const works = await testLogin(user.email, user.password);
+        if (works) {
+          console.log(`  ${user.email} / ${user.password} (${user.isAdmin ? 'ADMIN' : 'USER'})`);
+        }
+      }
+    }
+  } else {
+    console.log('\n❌ Repair failed. Manual intervention may be required.');
+  }
+}
+
+main().catch(console.error);

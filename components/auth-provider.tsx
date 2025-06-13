@@ -1,9 +1,10 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useMemo } from "react"
+import { createContext, useContext, useMemo, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/hooks/use-auth"
+import { SessionManager } from "@/lib/session-manager"
 import type { User } from "@/hooks/use-auth"
 
 // Define types
@@ -67,15 +68,62 @@ const mockUsers = [
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const auth = useAuth()
   const router = useRouter()
+  const [isTabReturn, setIsTabReturn] = useState(false)
+  const [isAdminPage, setIsAdminPage] = useState(false)
+
+  // Check if current page is admin
+  useEffect(() => {
+    const checkAdminPage = () => {
+      setIsAdminPage(window.location.pathname.startsWith('/admin'))
+    }
+    
+    checkAdminPage()
+    
+    // Listen for route changes
+    const handleRouteChange = () => {
+      checkAdminPage()
+    }
+    
+    window.addEventListener('popstate', handleRouteChange)
+    
+    return () => {
+      window.removeEventListener('popstate', handleRouteChange)
+    }
+  }, [])
+
+  // Check if this is a tab return on mount
+  useEffect(() => {
+    const checkTabReturn = () => {
+      // Skip tab return logic for admin pages
+      if (isAdminPage) {
+        return
+      }
+      
+      // Check if we have session data and this might be a tab return
+      if (SessionManager.hasValidSession() || SessionManager.isTabSwitch()) {
+        setIsTabReturn(true)
+        // Clear the flag after a short delay
+        setTimeout(() => setIsTabReturn(false), 1000)
+      }
+    }
+    
+    checkTabReturn()
+  }, [isAdminPage])
 
   // Memoize the auth context value to prevent unnecessary re-renders
   const memoizedAuth = useMemo(() => auth, [auth.user, auth.isLoading, auth.isAuthenticated]);
 
-  // Show loading spinner while checking auth state
-  if (auth.isLoading) {
+  // Smart loading logic - never show loading screen for admin pages
+  const shouldShowLoading = auth.isLoading && !isTabReturn && !SessionManager.hasValidSession() && !isAdminPage
+
+  // Show loading spinner only when necessary
+  if (shouldShowLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-green-600"></div>
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <div className="flex flex-col items-center space-y-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
+          <p className="text-gray-600 text-sm">Loading...</p>
+        </div>
       </div>
     )
   }

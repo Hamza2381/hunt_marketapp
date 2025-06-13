@@ -1,0 +1,179 @@
+#!/usr/bin/env node
+
+// Check if test users exist and create them if needed
+// Run with: node scripts/setup-test-users.js
+
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config({ path: '.env.local' });
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+});
+
+const testUsers = [
+  {
+    name: 'Admin User',
+    email: 'admin@bizmart.com',
+    password: 'admin123',
+    accountType: 'business',
+    company: 'BizMart Admin',
+    isAdmin: true,
+    creditLimit: 0
+  },
+  {
+    name: 'John Doe',
+    email: 'john@company.com',
+    password: 'user123',
+    accountType: 'business',
+    company: 'Acme Corp',
+    isAdmin: false,
+    creditLimit: 5000
+  },
+  {
+    name: 'Jane Smith',
+    email: 'jane@personal.com',
+    password: 'user123',
+    accountType: 'personal',
+    isAdmin: false,
+    creditLimit: 1500
+  },
+  {
+    name: 'Bob Wilson',
+    email: 'bob@smallbiz.com',
+    password: 'temp2024',
+    accountType: 'business',
+    company: 'Wilson Industries',
+    isAdmin: false,
+    creditLimit: 10000
+  }
+];
+
+async function createTestUser(userData) {
+  const { name, email, password, accountType, company, isAdmin, creditLimit } = userData;
+  
+  console.log(`Creating user: ${email}`);
+  
+  try {
+    // Step 1: Clean up any existing profiles with this email
+    const { error: cleanupError } = await supabaseAdmin
+      .from('user_profiles')
+      .delete()
+      .eq('email', email);
+      
+    if (cleanupError && cleanupError.code !== 'PGRST116') {
+      console.log(`Cleanup for ${email}:`, cleanupError.message);
+    }
+    
+    // Step 2: Create auth user with system email
+    const timestamp = Date.now();
+    const randomId = Math.random().toString(36).substr(2, 9);
+    const authEmail = `user_${timestamp}_${randomId}@auth.internal`;
+    
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+      email: authEmail,
+      password: password,
+      email_confirm: true,
+    });
+    
+    if (authError) {
+      console.error(`❌ Auth user creation failed for ${email}:`, authError.message);
+      return false;
+    }
+    
+    // Step 3: Create profile
+    const profileData = {
+      id: authData.user.id,
+      name: name,
+      email: email,
+      account_type: accountType,
+      company_name: company || null,
+      is_admin: isAdmin,
+      credit_limit: creditLimit,
+      credit_used: 0,
+      status: 'active'
+    };
+    
+    const { error: profileError } = await supabaseAdmin
+      .from('user_profiles')
+      .insert(profileData);
+      
+    if (profileError) {
+      console.error(`❌ Profile creation failed for ${email}:`, profileError.message);
+      // Clean up auth user
+      await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
+      return false;
+    }
+    
+    console.log(`✅ Created ${email} (Auth: ${authEmail})`);
+    return true;
+    
+  } catch (error) {
+    console.error(`❌ Error creating ${email}:`, error.message);
+    return false;
+  }
+}
+
+async function setupTestUsers() {
+  console.log('=== SETTING UP TEST USERS ===\n');
+  
+  // Check which users already exist
+  console.log('Checking existing users...');
+  
+  const { data: existingProfiles, error: profilesError } = await supabaseAdmin
+    .from('user_profiles')
+    .select('email, name, status')
+    .in('email', testUsers.map(u => u.email));
+    
+  if (profilesError) {
+    console.error('Error checking existing profiles:', profilesError);
+    return;
+  }
+  
+  console.log(`Found ${existingProfiles.length} existing profiles:`);
+  existingProfiles.forEach(profile => {
+    console.log(`  - ${profile.email} (${profile.name}) - ${profile.status}`);
+  });
+  
+  console.log('\nCreating missing test users...\n');
+  
+  let created = 0;
+  let skipped = 0;
+  
+  for (const userData of testUsers) {
+    const exists = existingProfiles.some(p => 
+      p.email === userData.email && p.status === 'active'
+    );
+    
+    if (exists) {
+      console.log(`⏭️  Skipping ${userData.email} (already exists)`);
+      skipped++;
+    } else {
+      const success = await createTestUser(userData);
+      if (success) {
+        created++;
+      }
+    }
+  }
+  
+  console.log(`\n=== SUMMARY ===`);
+  console.log(`Created: ${created} users`);
+  console.log(`Skipped: ${skipped} users`);
+  console.log(`Total: ${created + skipped} users`);
+  
+  if (created > 0) {
+    console.log('\n=== TEST CREDENTIALS ===');
+    testUsers.forEach(user => {
+      console.log(`${user.email} / ${user.password} (${user.accountType}${user.isAdmin ? ' - ADMIN' : ''})`);
+    });
+  }
+  
+  console.log('\nTest users setup complete! You can now try logging in.');
+}
+
+setupTestUsers().catch(console.error);

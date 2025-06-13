@@ -1,0 +1,43 @@
+#!/usr/bin/env node
+
+// Simple test to verify the login API works correctly
+// Run with: node scripts/test-login.js
+
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config({ path: '.env.local' });
+
+const testLogin = async () => {
+  try {
+    console.log('Testing login API...');
+    
+    // Test with the custom login API
+    const response = await fetch('http://localhost:3000/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email: 'test@example.com',
+        password: 'test123456'
+      }),
+    });
+    
+    const result = await response.json();
+    
+    console.log('Response status:', response.status);
+    console.log('Response body:', result);
+    
+    if (result.success) {
+      console.log('✅ Login API working correctly');
+      console.log('Auth email:', result.authEmail);
+      console.log('Real email:', result.user.email);
+    } else {
+      console.log('❌ Login API failed:', result.error);
+    }
+    
+  } catch (error) {
+    console.error('Test error:', error.message);
+  }
+};
+
+testLogin();

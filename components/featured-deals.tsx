@@ -4,11 +4,11 @@ import { useEffect, useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Star, ShoppingCart, Loader2 } from "lucide-react"
-import { supabase } from "@/lib/supabase-client"
+import { Star, ShoppingCart, Loader2, AlertCircle, RefreshCw } from "lucide-react"
 import { useCart } from "@/hooks/use-cart"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/hooks/use-auth"
+import { fastCache, CACHE_KEYS } from "@/lib/fast-cache"
 
 interface Deal {
   id: number
@@ -30,55 +30,84 @@ export function FeaturedDeals() {
   const { isAuthenticated } = useAuth()
   const [deals, setDeals] = useState<Deal[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  
+  const fetchFeaturedDeals = async () => {
+    try {
+      setIsLoading(true)
+      setError(null)
+      
+      // Check cache first
+      const cached = fastCache.get<Deal[]>(CACHE_KEYS.FEATURED_DEALS)
+      if (cached) {
+        setDeals(cached)
+        setIsLoading(false)
+        return
+      }
+      
+      // Use API endpoint
+      const response = await fetch('/api/products?featured=true&limit=4', {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include'
+      })
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`)
+      }
+      
+      const result = await response.json()
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch products')
+      }
+      
+      // Transform API data to Deal format
+      const featuredDeals = result.data.map((product: any) => {
+        // Calculate original price (20-50% higher than actual price for demo)
+        const markup = Math.random() * 0.3 + 0.2 // 20-50% markup
+        const originalPrice = product.price * (1 + markup)
+        
+        // Calculate discount percentage
+        const discountPercent = Math.floor(markup * 100)
+        
+        return {
+          id: product.id,
+          title: product.name,
+          price: product.price,
+          originalPrice: originalPrice,
+          rating: product.rating || (Math.random() * 2 + 3).toFixed(1),
+          reviews: product.reviews || Math.floor(Math.random() * 2000) + 100,
+          badge: discountPercent > 30 ? "Price Promise" : "New Customers",
+          discount: discountPercent > 30 ? `${discountPercent}% off` : undefined,
+          image: product.image_url || "/placeholder.svg?height=200&width=200",
+          inStock: product.stock_quantity > 0,
+          sku: product.sku
+        }
+      })
+      
+      // Cache the results for 5 minutes
+      fastCache.set(CACHE_KEYS.FEATURED_DEALS, featuredDeals, 5 * 60 * 1000)
+      
+      setDeals(featuredDeals)
+    } catch (error: any) {
+      console.error('Error fetching featured deals:', error)
+      setError(error.message || 'Failed to load featured deals')
+      setDeals([])
+    } finally {
+      setIsLoading(false)
+    }
+  }
   
   useEffect(() => {
-    async function fetchFeaturedDeals() {
-      try {
-        setIsLoading(true)
-        // Get featured products - top 4 with highest price difference (best deals)
-        const { data, error } = await supabase
-          .from('products')
-          .select('*')
-          .eq('status', 'active')
-          .order('price', { ascending: false })
-          .limit(4)
-        
-        if (error) throw error
-        
-        // Transform to Deal format
-        const featuredDeals = data.map(product => {
-          // Calculate original price (20-50% higher than actual price for demo)
-          const markup = Math.random() * 0.3 + 0.2 // 20-50% markup
-          const originalPrice = product.price * (1 + markup)
-          
-          // Calculate discount percentage
-          const discountPercent = Math.floor(markup * 100)
-          
-          return {
-            id: product.id,
-            title: product.name,
-            price: product.price,
-            originalPrice: originalPrice,
-            rating: (Math.random() * 2 + 3).toFixed(1), // Random 3-5 star rating
-            reviews: Math.floor(Math.random() * 2000) + 100, // Random review count
-            badge: discountPercent > 30 ? "Price Promise" : "New Customers",
-            discount: discountPercent > 30 ? `${discountPercent}% off` : undefined,
-            image: product.image_url || "/placeholder.svg?height=200&width=200",
-            inStock: product.stock_quantity > 0,
-            sku: product.sku
-          }
-        })
-        
-        setDeals(featuredDeals)
-      } catch (error) {
-        console.error('Error fetching featured deals:', error)
-      } finally {
-        setIsLoading(false)
-      }
-    }
-    
     fetchFeaturedDeals()
   }, [])
+  
+  const handleRetry = () => {
+    // Clear cache and retry
+    fastCache.clear(CACHE_KEYS.FEATURED_DEALS)
+    fetchFeaturedDeals()
+  }
   
   const handleAddToCart = (deal: Deal) => {
     if (!isAuthenticated) {
@@ -114,26 +143,57 @@ export function FeaturedDeals() {
       description: `${deal.title} has been added to your cart.`,
     })
   }
+
   return (
     <div className="bg-gray-50 py-8">
       <div className="container mx-auto px-4">
         <h2 className="text-2xl font-bold mb-6">Featured Deals</h2>
         
         {isLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {/* Show skeleton loading cards */}
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Card key={i} className="animate-pulse">
+                <CardContent className="p-4">
+                  <div className="bg-gray-200 h-48 rounded-lg mb-4"></div>
+                  <div className="space-y-2">
+                    <div className="bg-gray-200 h-4 rounded w-full"></div>
+                    <div className="bg-gray-200 h-4 rounded w-2/3"></div>
+                    <div className="bg-gray-200 h-6 rounded w-1/3"></div>
+                    <div className="bg-gray-200 h-8 rounded w-full"></div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : error ? (
           <div className="text-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin mx-auto" />
-            <p className="mt-4 text-gray-600">Loading featured deals...</p>
+            <div className="flex flex-col items-center space-y-4">
+              <AlertCircle className="h-12 w-12 text-red-500" />
+              <h3 className="text-lg font-medium text-red-600">Error loading deals</h3>
+              <p className="text-gray-600">{error}</p>
+              <Button variant="outline" onClick={handleRetry}>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Try Again
+              </Button>
+            </div>
+          </div>
+        ) : deals.length === 0 ? (
+          <div className="text-center py-12">
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No deals available</h3>
+            <p className="text-gray-600">Check back later for new deals.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             {deals.map((deal) => (
-              <Card key={deal.id} className="hover:shadow-lg transition-shadow">
+              <Card key={deal.id} className="hover:shadow-lg transition-shadow duration-200">
                 <CardContent className="p-4">
                   <div className="relative mb-4">
                     <img
                       src={deal.image || "/placeholder.svg"}
                       alt={deal.title}
                       className="w-full h-48 object-cover rounded-lg"
+                      loading="lazy"
                     />
                     <Badge className="absolute top-2 left-2 bg-blue-600">{deal.badge}</Badge>
                     {deal.discount && <Badge className="absolute top-2 right-2 bg-red-500">{deal.discount}</Badge>}

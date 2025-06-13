@@ -1,0 +1,48 @@
+#!/usr/bin/env node
+
+// Simple manual test of the login API endpoint
+// Run with: node scripts/test-login-api.js [email] [password]
+
+const fetch = require('node-fetch');
+
+async function testLoginAPI(email, password) {
+  console.log(`Testing login API with: ${email}`);
+  
+  try {
+    const response = await fetch('http://localhost:3000/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, password }),
+    });
+    
+    const data = await response.json();
+    
+    console.log('Response Status:', response.status);
+    console.log('Response Data:', JSON.stringify(data, null, 2));
+    
+    if (data.success) {
+      console.log('\n✅ Login API successful!');
+      console.log(`User: ${data.user.name} (${data.user.email})`);
+      console.log(`Auth Email: ${data.authEmail}`);
+      console.log(`Admin: ${data.user.isAdmin}`);
+    } else {
+      console.log('\n❌ Login API failed:', data.error);
+    }
+    
+  } catch (error) {
+    if (error.code === 'ECONNREFUSED') {
+      console.log('❌ Cannot connect to local server. Make sure the development server is running:');
+      console.log('  npm run dev');
+    } else {
+      console.log('❌ Error testing login API:', error.message);
+    }
+  }
+}
+
+// Get credentials from command line or use defaults
+const email = process.argv[2] || 'admin@bizmart.com';
+const password = process.argv[3] || 'admin123';
+
+testLoginAPI(email, password);

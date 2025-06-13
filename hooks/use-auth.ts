@@ -1,8 +1,8 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import { supabase } from "@/lib/supabase-client"
-import { supabaseAdmin } from "@/lib/supabase-admin"
+import { SessionManager } from "@/lib/session-manager"
 import type { User as SupabaseUser } from "@supabase/supabase-js"
 
 export interface User {
@@ -28,271 +28,474 @@ export interface User {
 }
 
 export function useAuth() {
-  // Memoize user state to improve performance and prevent unnecessary re-renders
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [initialized, setInitialized] = useState(false)
-  
-  // Create ref at the top level of the hook
-  const isAuthenticatedRef = useRef(false)
-  
-  // Update the ref when user changes
-  useEffect(() => {
-    if (user) {
-      isAuthenticatedRef.current = true
-    } else {
-      // Only update the ref if we're sure user is null AND we're not in a loading state
-      // This prevents flickering during tab switches
-      if (!isLoading && typeof window !== 'undefined') {
-        // Check if this is a genuine logout vs a page refresh/tab switch
-        const isFullUnload = sessionStorage.getItem('fullPageUnload') === 'true';
-        if (isFullUnload) {
-          isAuthenticatedRef.current = false;
-          sessionStorage.removeItem('fullPageUnload');
-        }
-      }
-    }
-  }, [user, isLoading])
-  
-  // Cache auth state to survive refreshes and back/forward navigation
-  useEffect(() => {
+
+  // Memoize isAuthenticated to prevent unnecessary re-renders
+  const isAuthenticated = useMemo(() => !!user, [user])
+
+  // Enhanced user profile loading with admin status protection
+  const loadUserProfile = useCallback(async (supabaseUser: SupabaseUser) => {
+    const isAdminPage = window.location.pathname.startsWith('/admin')
     
-    if (typeof window !== 'undefined') {
-      // Only cache the minimal user data when we have a user
-      if (user) {
-        sessionStorage.setItem('userMinimal', JSON.stringify({ 
-          id: user.id,
-          isAuthenticated: true 
-        }));
-      }
-      
-      // Function to handle page visibility changes (tab switching, etc.)
-      const handleVisibilityChange = async () => {
-        // Check if we should prevent refresh due to user interaction
-        const preventRefresh = sessionStorage.getItem('preventRefresh') === 'true';
-        if (preventRefresh) {
-          return; // Skip authentication check if user recently interacted
-        }
-        
-        // Only check session if we're coming back to the tab
-        if (document.visibilityState === 'visible') {
-          // Do not trigger a refresh if we're already in a loading state
-          if (isLoading) return;
-          
-          // If we think we're authenticated but don't have a user object
-          if (isAuthenticatedRef.current && !user) {
-            console.log('Tab visible again, checking auth state without refresh');
-            
-            try {
-              // Just check if we have a session, don't reload
-              const { data } = await supabase.auth.getSession();
-              if (!data.session) {
-                // Only clear auth state if we really don't have a session
-                isAuthenticatedRef.current = false;
-                sessionStorage.removeItem('userMinimal');
-              }
-              // Do not force reload - the existing auth state listeners will handle this
-            } catch (err) {
-              console.error('Error checking auth state:', err);
-            }
-          }
-        }
-      };
-      
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-      
-      return () => {
-        document.removeEventListener('visibilitychange', handleVisibilityChange);
-      };
-    }
-  }, [isLoading, user, isAuthenticatedRef]);
-
-  useEffect(() => {
-   // Initialize auth
-    // Get initial session
-    const getInitialSession = async () => {
-      // Set a flag to prevent multiple simultaneous auth checks
-      if (initialized) return;
-      setInitialized(true);
-      
-      // Check if we have minimal user data in session storage to avoid loading state flicker
-      if (typeof window !== 'undefined') {
-        const storedUser = sessionStorage.getItem('userMinimal');
-        if (storedUser) {
-          try {
-            const minimalUser = JSON.parse(storedUser);
-            // Set minimal user info to prevent loading screen on navigation
-            if (minimalUser && minimalUser.isAuthenticated) {
-              // Don't set full loading state if we have minimal info
-              setIsLoading(false);
-              // Set the auth ref to true to maintain state during tab switches
-              isAuthenticatedRef.current = true;
-            }
-          } catch (e) {
-            console.error('Error parsing stored user data', e);
-          }
-        }
-      }
-
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession()
-        
-        if (session?.user) {
-          await loadUserProfile(session.user)
-        } else {
-          setIsLoading(false)
-        }
-      } catch (error) {
-        console.error('Error getting initial session:', error);
-        setIsLoading(false);
-      }
-    }
-
-    getInitialSession()
-
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      // Auth state changed handler
-
-      if (session?.user) {
-        await loadUserProfile(session.user)
-      } else {
-        setUser(null)
-        setIsLoading(false)
-      }
-    })
-
-    return () => subscription.unsubscribe()
-  }, [])
-
-  const loadUserProfile = async (supabaseUser: SupabaseUser) => {
     try {
-      // Only set loading if we're not already in a loading state
-      if (!isLoading) {
-        setIsLoading(true)
+      console.log('Loading user profile for:', supabaseUser.id, 'on admin page:', isAdminPage)
+
+      // Test database connection first
+      try {
+        const { data: connectionTest, error: connectionError } = await supabase
+          .from('user_profiles')
+          .select('count')
+          .limit(1)
+        
+        if (connectionError) {
+          console.error('Database connection test failed:', connectionError)
+          throw new Error(`Database connection failed: ${connectionError.message}`)
+        }
+        
+        console.log('Database connection successful for user profiles')
+      } catch (dbError: any) {
+        console.error('Database connection error:', dbError)
+        throw new Error(`Database connection error: ${dbError.message}`)
       }
 
+      // Get profile from database with proper error handling
+      console.log('Fetching user profile from database...')
       const { data: fetchedProfile, error } = await supabase
         .from("user_profiles")
         .select("*")
         .eq("id", supabaseUser.id)
         .single()
-      
-      let profile = fetchedProfile
 
-      if (error) {
-        console.error("Error loading user profile:", error)
-
-        // If profile doesn't exist, create it
-        if (error.code === "PGRST116") {
-          console.log("Creating user profile...")
-          const { data: newProfile, error: createError } = await supabase
-            .from("user_profiles")
-            .insert({
-              id: supabaseUser.id,
-              name: supabaseUser.user_metadata?.name || supabaseUser.email?.split("@")[0] || "User",
-              email: supabaseUser.email!,
-              account_type: supabaseUser.user_metadata?.account_type || "personal",
-              company_name: supabaseUser.user_metadata?.company_name,
-              is_admin: false,
-              credit_limit: 1000, // Default credit limit for new users
-              credit_used: 0,
-            })
-            .select()
-            .single()
-
-          if (createError) {
-            console.error("Error creating user profile:", createError)
-            setIsLoading(false)
-            return
-          }
-
-          profile = newProfile
-        } else {
-          setIsLoading(false)
-          return
-        }
+      if (error && error.code !== "PGRST116") {
+        console.error("Error fetching profile:", {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code,
+          userId: supabaseUser.id
+        })
+        throw error
       }
 
-      if (profile) {
-        const user: User = {
-          id: profile.id,
-          name: profile.name,
-          email: profile.email,
-          accountType: profile.account_type,
-          isAdmin: profile.is_admin,
-          creditLimit: profile.credit_limit || 0,
-          creditUsed: profile.credit_used || 0,
-          availableCredit: (profile.credit_limit || 0) - (profile.credit_used || 0),
-          company: profile.company_name,
-          phone: profile.phone,
-          address: profile.address_street
-            ? {
-                street: profile.address_street,
-                city: profile.address_city || "",
-                state: profile.address_state || "",
-                zipCode: profile.address_zip || "",
-              }
-            : undefined,
-          createdAt: profile.created_at,
+      let profileData = fetchedProfile
+
+      // If profile doesn't exist, create it (but never as admin by default)
+      if (!profileData) {
+        console.log("Creating new user profile...")
+        
+        const newProfile = {
+          id: supabaseUser.id,
+          name: supabaseUser.user_metadata?.name || supabaseUser.email?.split("@")[0] || "User",
+          email: supabaseUser.email!,
+          account_type: supabaseUser.user_metadata?.account_type || "personal",
+          company_name: supabaseUser.user_metadata?.company_name,
+          is_admin: false, // New users are never admin by default
+          credit_limit: 1000,
+          credit_used: 0,
+          status: 'active'
         }
 
-        // User profile successfully loaded
+        const { data: createdProfile, error: createError } = await supabase
+          .from("user_profiles")
+          .insert([newProfile])
+          .select()
+          .single()
+
+        if (createError) {
+          console.error("Error creating profile:", createError)
+          throw createError
+        }
+
+        profileData = createdProfile
+      }
+
+      if (profileData) {
+        const user: User = {
+          id: profileData.id,
+          name: profileData.name,
+          email: profileData.email,
+          accountType: profileData.account_type,
+          isAdmin: Boolean(profileData.is_admin), // Ensure boolean conversion
+          creditLimit: profileData.credit_limit || 0,
+          creditUsed: profileData.credit_used || 0,
+          availableCredit: (profileData.credit_limit || 0) - (profileData.credit_used || 0),
+          company: profileData.company_name,
+          phone: profileData.phone,
+          address: profileData.address_street
+            ? {
+                street: profileData.address_street,
+                city: profileData.address_city || "",
+                state: profileData.address_state || "",
+                zipCode: profileData.address_zip || "",
+              }
+            : undefined,
+          createdAt: profileData.created_at,
+        }
+
+        console.log('User profile loaded successfully:', {
+          email: user.email,
+          isAdmin: user.isAdmin,
+          adminValue: profileData.is_admin,
+          booleanCheck: Boolean(profileData.is_admin)
+        })
+        
         setUser(user)
         
-        // Cache minimal user data for navigation state preservation
-        if (typeof window !== 'undefined') {
-          // Store user data with a longer expiration
-          try {
-            const userData = { 
-              id: user.id,
-              isAuthenticated: true,
-              timestamp: new Date().getTime()
-            };
-            sessionStorage.setItem('userMinimal', JSON.stringify(userData));
-            
-            // Also set a flag to help with navigation
-            sessionStorage.setItem('isLoggedIn', 'true');
-          } catch (e) {
-            console.error('Error storing user data:', e);
-          }
+        // Only save to session for non-admin pages to avoid conflicts
+        if (!isAdminPage) {
+          SessionManager.saveAppState({
+            isAuthenticated: true,
+            userEmail: user.email,
+            userId: user.id,
+            isAdmin: user.isAdmin,
+            currentPath: window.location.pathname
+          })
         }
+      } else {
+        console.log('No profile data found')
+        setUser(null)
       }
     } catch (error) {
       console.error("Error loading user profile:", error)
+      // Only clear session for non-admin pages
+      if (!isAdminPage) {
+        SessionManager.clearAppState()
+      }
+      setUser(null)
+    }
+  }, []) // Remove dependencies to prevent recreations
+
+  // Fast restoration from session (disabled for admin pages)
+  const restoreFromSession = useCallback(() => {
+    // Never restore from session on admin pages
+    if (window.location.pathname.startsWith('/admin')) {
+      return false
+    }
+    
+    const sessionUser = SessionManager.getUserFromSession()
+    if (sessionUser) {
+      console.log('Restoring user from session:', sessionUser.email, 'isAdmin:', sessionUser.isAdmin)
+      setUser({
+        id: sessionUser.id,
+        name: 'Loading...',
+        email: sessionUser.email,
+        accountType: 'personal',
+        isAdmin: sessionUser.isAdmin,
+        creditLimit: 0,
+        creditUsed: 0,
+        availableCredit: 0
+      } as User)
+      return true
+    }
+    return false
+  }, []) // Remove dependencies
+
+  // Initialize auth state with enhanced admin page handling
+  useEffect(() => {
+    if (initialized) return
+    
+    let isMounted = true // Prevent state updates if component unmounts
+    
+    const initializeAuth = async () => {
+      try {
+        console.log('Initializing auth...')
+        
+        if (!isMounted) return
+        setInitialized(true)
+
+        // For admin pages, use direct database lookup without session management
+        if (window.location.pathname.startsWith('/admin')) {
+          console.log('Admin page detected - using direct auth flow')
+          
+          try {
+            const { data: { session } } = await supabase.auth.getSession()
+            
+            if (session?.user && isMounted) {
+              // Direct profile load for admin pages
+              await loadUserProfile(session.user)
+            } else {
+              console.log('No session found for admin page')
+              if (isMounted) setUser(null)
+            }
+          } catch (error) {
+            console.error('Admin auth error:', error)
+            if (isMounted) setUser(null)
+          } finally {
+            if (isMounted) setIsLoading(false)
+          }
+          return
+        }
+
+        // Regular flow for non-admin pages
+        // Check if this is a tab switch return
+        if (SessionManager.isTabSwitch()) {
+          console.log('Detected tab switch - attempting quick restore')
+          if (restoreFromSession() && isMounted) {
+            setIsLoading(false)
+            SessionManager.clearTabSwitch()
+            
+            // Verify and refresh user data in background
+            const { data: { session } } = await supabase.auth.getSession()
+            if (session?.user && isMounted) {
+              await loadUserProfile(session.user)
+            }
+            return
+          }
+          SessionManager.clearTabSwitch()
+        }
+
+        // Check if we have valid session data for quick restore
+        if (SessionManager.hasValidSession()) {
+          console.log('Found valid session - quick restore')
+          if (restoreFromSession() && isMounted) {
+            setIsLoading(false)
+            
+            // Verify auth in background and refresh if needed
+            const { data: { session } } = await supabase.auth.getSession()
+            if (session?.user && isMounted) {
+              await loadUserProfile(session.user)
+            } else {
+              // Session expired, clear state
+              if (isMounted) {
+                setUser(null)
+                SessionManager.clearAppState()
+              }
+            }
+            return
+          }
+        }
+
+        // Full initialization
+        console.log('Performing full auth initialization')
+        const { data: { session } } = await supabase.auth.getSession()
+        
+        if (session?.user && isMounted) {
+          await loadUserProfile(session.user)
+        } else {
+          SessionManager.clearAppState()
+          if (isMounted) setUser(null)
+        }
+      } catch (error) {
+        console.error('Error initializing auth:', error)
+        if (isMounted) {
+          SessionManager.clearAppState()
+          setUser(null)
+        }
+      } finally {
+        if (isMounted) setIsLoading(false)
+      }
+    }
+
+    initializeAuth()
+    
+    // Cleanup function to prevent state updates on unmounted component
+    return () => {
+      isMounted = false
+    }
+  }, []) // Empty dependency array to run only once
+
+  // Listen for auth changes with improved logout handling
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('Auth state changed:', event, 'Session exists:', !!session)
+      
+      if (event === 'SIGNED_IN' && session?.user) {
+        // For admin pages, always reload profile from database
+        if (window.location.pathname.startsWith('/admin')) {
+          console.log('Admin page - reloading profile from database')
+          await loadUserProfile(session.user)
+          setIsLoading(false)
+          return
+        }
+        
+        // Regular flow for non-admin pages
+        setIsLoading(true)
+        await loadUserProfile(session.user)
+        setIsLoading(false)
+      } else if (event === 'SIGNED_OUT' || !session) {
+        console.log('User signed out or session expired')
+        
+        // Clear all state regardless of page type
+        setUser(null)
+        SessionManager.clearAppState()
+        setIsLoading(false)
+        
+        // Only redirect to login if not already on login/signup pages or other public pages
+        if (typeof window !== 'undefined') {
+          const currentPath = window.location.pathname
+          const isAlreadyOnAuthPage = currentPath.includes('/login') || 
+                                     currentPath.includes('/signup') || 
+                                     currentPath.includes('/forgot-password') || 
+                                     currentPath.includes('/reset-password')
+          
+          const isPublicPage = currentPath === '/' || 
+                              currentPath.includes('/products') || 
+                              currentPath.includes('/categories') || 
+                              currentPath.includes('/deals') || 
+                              currentPath.includes('/contact')
+          
+          // Only redirect if user is on a protected page
+          if (!isAlreadyOnAuthPage && !isPublicPage) {
+            console.log('Redirecting to login page from protected route:', currentPath)
+            setTimeout(() => {
+              window.location.href = '/login'
+            }, 100)
+          }
+        }
+      }
+    })
+
+    return () => subscription.unsubscribe()
+  }, [loadUserProfile])
+
+  // Tab visibility management (disabled for admin pages)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      // Skip all session management for admin pages
+      if (window.location.pathname.startsWith('/admin')) {
+        return
+      }
+      
+      if (document.hidden) {
+        SessionManager.markTabSwitch()
+        SessionManager.updateActivity()
+      } else {
+        SessionManager.updateActivity()
+        
+        if (user) {
+          SessionManager.saveAppState({
+            isAuthenticated: true,
+            userEmail: user.email,
+            userId: user.id,
+            isAdmin: user.isAdmin,
+            currentPath: window.location.pathname
+          })
+        }
+      }
+    }
+
+    const handleFocus = () => {
+      if (window.location.pathname.startsWith('/admin')) {
+        return
+      }
+      SessionManager.updateActivity()
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', handleFocus)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [user])
+
+  const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      setIsLoading(true)
+      
+      // Use our custom login API
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      })
+      
+      const result = await response.json()
+      
+      if (!result.success) {
+        return { success: false, error: result.error || 'Login failed' }
+      }
+      
+      // Sign in with auth credentials
+      const { error } = await supabase.auth.signInWithPassword({
+        email: result.authEmail,
+        password: result.password,
+      })
+
+      if (error) {
+        return { success: false, error: error.message }
+      }
+
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: "An unexpected error occurred" }
     } finally {
       setIsLoading(false)
     }
   }
 
-  const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
-    try {
-      setIsLoading(true)
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      })
-
-      if (error) {
-        setIsLoading(false)
-        return { success: false, error: error.message }
-      }
-
-      // User profile will be loaded by the auth state change listener
-      return { success: true }
-    } catch (error) {
-      setIsLoading(false)
-      return { success: false, error: "An unexpected error occurred" }
-    }
-  }
-
   const logout = async () => {
-    await supabase.auth.signOut()
-    setUser(null)
+    try {
+      console.log('Starting logout process...')
+      
+      // Set loading state to prevent UI interactions during logout
+      setIsLoading(true)
+      
+      // Step 1: Clear local state immediately for immediate UI feedback
+      setUser(null)
+      
+      // Step 2: Clear all session data regardless of page type
+      SessionManager.clearAppState()
+      
+      // Step 3: Sign out from Supabase with timeout protection
+      const signOutPromise = supabase.auth.signOut({
+        scope: 'global' // Sign out from all sessions
+      })
+      
+      // Add 5-second timeout to prevent hanging
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Logout timeout')), 5000)
+      )
+      
+      try {
+        await Promise.race([signOutPromise, timeoutPromise])
+        console.log('Supabase signOut completed successfully')
+      } catch (signOutError) {
+        console.warn('Supabase signOut failed or timed out:', signOutError)
+        // Continue with local cleanup even if remote signout fails
+      }
+      
+      // Step 4: Force clear any remaining auth tokens
+      try {
+        await supabase.auth.refreshSession()
+      } catch {
+        // Ignore refresh errors - we're logging out anyway
+      }
+      
+      // Step 5: Clear browser storage manually as backup
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem('supabase-auth-token')
+          sessionStorage.clear()
+        } catch (storageError) {
+          console.warn('Failed to clear storage:', storageError)
+        }
+      }
+      
+      console.log('Logout process completed')
+      
+      // Step 6: Force redirect to login page after a short delay
+      setTimeout(() => {
+        if (typeof window !== 'undefined') {
+          window.location.href = '/login'
+        }
+      }, 100)
+      
+    } catch (error) {
+      console.error('Logout error:', error)
+      // Even if logout fails, clear local state and redirect
+      setUser(null)
+      SessionManager.clearAppState()
+      
+      if (typeof window !== 'undefined') {
+        window.location.href = '/login'
+      }
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const signUp = async (
@@ -319,15 +522,14 @@ export function useAuth() {
       })
 
       if (error) {
-        setIsLoading(false)
         return { success: false, error: error.message }
       }
 
-      // User profile will be created by the trigger or auth state change listener
       return { success: true }
     } catch (error) {
-      setIsLoading(false)
       return { success: false, error: "An unexpected error occurred" }
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -335,59 +537,24 @@ export function useAuth() {
     if (!user) return { success: false, error: "Not authenticated" }
 
     try {
-         const dbUpdates: any = {}
+      const dbUpdates: any = {}
+      
       if (updates.name !== undefined) dbUpdates.name = updates.name?.trim()
-      
-      // Special handling for email updates to prevent conflicts
-      if (updates.email !== undefined) {
-        const newEmail = updates.email.toLowerCase().trim();
-        
-        // Check if email is changing and if new email already exists
-        if (newEmail && newEmail !== user.email.toLowerCase()) {
-          const { data: existingUser, error: emailCheckError } = await supabase
-            .from("user_profiles")
-            .select("id, email")
-            .eq("email", newEmail)
-            .neq("id", user.id)
-            .maybeSingle();
-          
-          if (emailCheckError && emailCheckError.code !== 'PGRST116') {
-            console.error("Error checking email uniqueness:", emailCheckError);
-            return { success: false, error: "Failed to verify email uniqueness" };
-          }
-          
-          if (existingUser) {
-            return { success: false, error: `Email ${updates.email} is already in use` };
-          }
-          
-          dbUpdates.email = newEmail;
-        }
-      }
-      
+      if (updates.email !== undefined) dbUpdates.email = updates.email?.toLowerCase().trim()
       if (updates.accountType !== undefined) dbUpdates.account_type = updates.accountType
       if (updates.company !== undefined) dbUpdates.company_name = updates.company?.trim()
       if (updates.phone !== undefined) dbUpdates.phone = updates.phone?.trim()
       
-      // Special handling for credit fields to ensure proper decimal formatting
       if (updates.creditLimit !== undefined) {
-        // Force number and format to 2 decimal places for DB
-        const creditLimit = Number(updates.creditLimit);
-        if (!isNaN(creditLimit)) {
-          dbUpdates.credit_limit = creditLimit;
-          console.log("Credit Update - Setting credit_limit to:", dbUpdates.credit_limit);
-        }
+        const creditLimit = Number(updates.creditLimit)
+        if (!isNaN(creditLimit)) dbUpdates.credit_limit = creditLimit
       }
       
       if (updates.creditUsed !== undefined) {
-        // Force number and format to 2 decimal places for DB
-        const creditUsed = Number(updates.creditUsed);
-        if (!isNaN(creditUsed)) {
-          dbUpdates.credit_used = creditUsed;
-          console.log("Credit Update - Setting credit_used to:", dbUpdates.credit_used);
-        }
+        const creditUsed = Number(updates.creditUsed)
+        if (!isNaN(creditUsed)) dbUpdates.credit_used = creditUsed
       }
       
-      // Handle address
       if (updates.address) {
         if (updates.address.street !== undefined) dbUpdates.address_street = updates.address.street
         if (updates.address.city !== undefined) dbUpdates.address_city = updates.address.city
@@ -395,21 +562,21 @@ export function useAuth() {
         if (updates.address.zipCode !== undefined) dbUpdates.address_zip = updates.address.zipCode
       }
 
-      console.log("Credit Update - Final DB updates:", dbUpdates);
-      
-      // Make sure we have something to update
       if (Object.keys(dbUpdates).length === 0) {
-        console.error("Credit Update - No valid fields to update");
-        return { success: false, error: "No valid fields to update" };
+        return { success: false, error: "No valid fields to update" }
       }
-      const { error } = await supabase.from("user_profiles").update(dbUpdates).eq("id", user.id)
+
+      const { error } = await supabase
+        .from("user_profiles")
+        .update(dbUpdates)
+        .eq("id", user.id)
 
       if (error) {
         return { success: false, error: error.message }
       }
 
-      // Reload user profile
-      const supabaseUser = (await supabase.auth.getUser()).data.user
+      // Reload user profile to get updated data
+      const { data: { user: supabaseUser } } = await supabase.auth.getUser()
       if (supabaseUser) {
         await loadUserProfile(supabaseUser)
       }
@@ -420,43 +587,8 @@ export function useAuth() {
     }
   }
 
-  const changePassword = async (newPassword: string): Promise<{ success: boolean; error?: string }> => {
-    try {
-      const { error } = await supabase.auth.updateUser({
-        password: newPassword,
-      })
-
-      if (error) {
-        return { success: false, error: error.message }
-      }
-
-      return { success: true }
-    } catch (error) {
-      return { success: false, error: "An unexpected error occurred" }
-    }
-  }
-
-  const requestPasswordReset = async (email: string): Promise<{ success: boolean; error?: string }> => {
-    try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`,
-      })
-
-      if (error) {
-        return { success: false, error: error.message }
-      }
-
-      return { success: true }
-    } catch (error) {
-      return { success: false, error: "An unexpected error occurred" }
-    }
-  }
-
-  // Admin-specific functions
+  // Admin functions
   const getAllUsers = async () => {
-    // No need to check for admin status here as we'll handle this in the component
-    // This allows the component to properly load before checking permissions
-
     try {
       const { data, error } = await supabase
         .from("user_profiles")
@@ -468,15 +600,15 @@ export function useAuth() {
         return []
       }
 
-      // Transform to User type
       return data.map((profile: any) => ({
         id: profile.id,
         name: profile.name,
         email: profile.email,
         accountType: profile.account_type,
-        isAdmin: profile.is_admin,
+        isAdmin: Boolean(profile.is_admin), // Ensure boolean conversion
         creditLimit: profile.credit_limit || 0,
         creditUsed: profile.credit_used || 0,
+        availableCredit: (profile.credit_limit || 0) - (profile.credit_used || 0),
         company: profile.company_name,
         phone: profile.phone,
         address: profile.address_street
@@ -488,7 +620,6 @@ export function useAuth() {
             }
           : undefined,
         createdAt: profile.created_at,
-        temporaryPassword: profile.temporary_password || true, // Default to true if column doesn't exist yet
         lastLogin: profile.last_login,
       })) || []
     } catch (error) {
@@ -499,338 +630,87 @@ export function useAuth() {
 
   const updateUserById = async (id: string, updates: any) => {
     if (!user?.isAdmin) {
-      console.error("Unauthorized access to updateUserById");
-      return { success: false, error: "Unauthorized" };
+      return { success: false, error: "Unauthorized" }
     }
 
     try {
-      console.log("Credit Update - Updating user with ID:", id);
-      console.log("Credit Update - Updates received:", updates);
+      const response = await fetch('/api/admin/users/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: id,
+          updates: updates,
+          adminUserId: user.id
+        }),
+      })
       
-      // Convert from camelCase to snake_case for DB
-      const dbUpdates: any = {}
-      if (updates.name !== undefined) dbUpdates.name = updates.name?.trim()
+      const result = await response.json()
       
-      // Special handling for email updates to prevent conflicts
-      if (updates.email !== undefined) {
-        const newEmail = updates.email.toLowerCase().trim();
-        
-        // Check if email is changing and if new email already exists
-        if (newEmail) {
-          const { data: existingUser, error: emailCheckError } = await supabase
-            .from("user_profiles")
-            .select("id, email")
-            .eq("email", newEmail)
-            .neq("id", id)
-            .maybeSingle();
-          
-          if (emailCheckError && emailCheckError.code !== 'PGRST116') {
-            console.error("Error checking email uniqueness:", emailCheckError);
-            return { success: false, error: "Failed to verify email uniqueness" };
-          }
-          
-          if (existingUser) {
-            return { success: false, error: `Email ${updates.email} is already in use by another user` };
-          }
-          
-          dbUpdates.email = newEmail;
-        }
+      if (!response.ok) {
+        return { success: false, error: result.error || 'Update failed' }
       }
       
-      if (updates.accountType !== undefined) dbUpdates.account_type = updates.accountType
-      if (updates.company !== undefined) dbUpdates.company_name = updates.company?.trim()
-      if (updates.phone !== undefined) dbUpdates.phone = updates.phone?.trim()
-      
-      // Special handling for credit fields to ensure proper decimal formatting
-      if (updates.creditLimit !== undefined) {
-        // Force number and format to 2 decimal places for DB
-        const creditLimit = Number(updates.creditLimit);
-        if (!isNaN(creditLimit)) {
-          dbUpdates.credit_limit = creditLimit;
-          console.log("Credit Update - Setting credit_limit to:", dbUpdates.credit_limit);
-        }
-      }
-      
-      if (updates.creditUsed !== undefined) {
-        // Force number and format to 2 decimal places for DB
-        const creditUsed = Number(updates.creditUsed);
-        if (!isNaN(creditUsed)) {
-          dbUpdates.credit_used = creditUsed;
-          console.log("Credit Update - Setting credit_used to:", dbUpdates.credit_used);
-        }
-      }
-      
-      // Handle address
-      if (updates.address) {
-        if (updates.address.street !== undefined) dbUpdates.address_street = updates.address.street
-        if (updates.address.city !== undefined) dbUpdates.address_city = updates.address.city
-        if (updates.address.state !== undefined) dbUpdates.address_state = updates.address.state
-        if (updates.address.zipCode !== undefined) dbUpdates.address_zip = updates.address.zipCode
-      }
-
-      console.log("Credit Update - Final DB updates:", dbUpdates);
-      
-      // Make sure we have something to update
-      if (Object.keys(dbUpdates).length === 0) {
-        console.error("Credit Update - No valid fields to update");
-        return { success: false, error: "No valid fields to update" };
-      }
-      
-      // Directly update the profile
-      const { data, error } = await supabase
-        .from("user_profiles")
-        .update(dbUpdates)
-        .eq("id", id)
-        .select();
-
-      if (error) {
-        console.error("Credit Update - Error updating profile:", error);
-        return { success: false, error: error.message };
-      }
-      
-      // Verify the update was successful
-      const { data: verifyData, error: verifyError } = await supabase
-        .from("user_profiles")
-        .select("*")
-        .eq("id", id)
-        .single();
-        
-      if (verifyError) {
-        console.error("Credit Update - Error verifying update:", verifyError);
-      } else {
-        console.log("Credit Update - Updated profile verification:", {
-          credit_limit: verifyData.credit_limit,
-          credit_used: verifyData.credit_used
-        });
-      }
-      
-      console.log("Credit Update - Update successful");
-      return { success: true, data: data?.[0] || verifyData };
+      return result
     } catch (error: any) {
-      console.error("Credit Update - Unexpected error:", error);
-      return { success: false, error: error.message || "An unexpected error occurred" };
+      return { success: false, error: error.message || "Network error" }
     }
   }
 
   const createUser = async (userData: any) => {
     if (!user?.isAdmin) {
-      console.error("Unauthorized access to createUser");
-      return { success: false, error: "Unauthorized" };
+      return { success: false, error: "Unauthorized" }
     }
 
     try {
-      console.log("Calling API to create user:", userData.email);
-      
       const response = await fetch('/api/admin/users', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(userData),
-      });
+      })
       
-      const result = await response.json();
-      
-      console.log('API response:', result);
-      
-      if (!response.ok) {
-        return { success: false, error: result.error || 'Failed to create user' };
-      }
-      
-      return result;
-      
+      return await response.json()
     } catch (error: any) {
-      console.error("User creation error:", error);
-      return { success: false, error: error.message || "An unexpected error occurred" };
+      return { success: false, error: error.message || "Network error" }
     }
   }
 
   const deleteUser = async (id: string) => {
     if (!user?.isAdmin) {
-      console.error("Unauthorized access to deleteUser");
-      return false;
+      return false
     }
 
     try {
-      console.log("Deleting user with ID:", id);
+      const response = await fetch(`/api/admin/users/${id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+      })
       
-      // First, get user profile to check for existing orders
-      const { data: userProfile, error: fetchError } = await supabase
-        .from("user_profiles")
-        .select("email, name")
-        .eq("id", id)
-        .single();
-      
-      if (fetchError) {
-        console.error("Error fetching user profile:", fetchError);
-        return false;
-      }
-      
-      // Check for existing orders
-      const { data: existingOrders, error: ordersError } = await supabase
-        .from("orders")
-        .select("id")
-        .eq("user_id", id);
-      
-      if (ordersError) {
-        console.error("Error checking existing orders:", ordersError);
-        return false;
-      }
-      
-      // If user has orders, we should not delete them completely
-      // Instead, we'll anonymize the user data
-      if (existingOrders && existingOrders.length > 0) {
-        console.log(`User has ${existingOrders.length} orders. Anonymizing user data instead of full deletion.`);
-        
-        // Anonymize the user profile
-        const anonymizedEmail = `deleted_user_${Date.now()}@anonymized.local`;
-        const { error: anonymizeError } = await supabase
-          .from("user_profiles")
-          .update({
-            name: "[Deleted User]",
-            email: anonymizedEmail,
-            phone: null,
-            address_street: null,
-            address_city: null,
-            address_state: null,
-            address_zip: null,
-            company_name: null,
-            status: "inactive",
-            updated_at: new Date().toISOString()
-          })
-          .eq("id", id);
-        
-        if (anonymizeError) {
-          console.error("Error anonymizing user profile:", anonymizeError);
-          return false;
-        }
-        
-        // Delete from auth after anonymizing profile
-        const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(id);
-        
-        if (authError) {
-          console.error("Error deleting auth user:", authError);
-          // Continue anyway - the profile has been anonymized which is the main goal
-          console.log("Auth deletion failed but profile has been anonymized");
-        }
-        
-        console.log(`User ${userProfile.email} anonymized successfully due to existing orders`);
-        return true;
-      }
-      
-      // If no orders exist, we can safely delete everything
-      console.log("No orders found. Proceeding with full deletion.");
-      
-      try {
-        // STEP 1: Delete related data first (foreign key constraints)
-        console.log("Deleting chat messages...");
-        const { error: messagesError } = await supabase
-          .from("chat_messages")
-          .delete()
-          .eq("sender_id", id);
-        
-        if (messagesError) {
-          console.error("Error deleting chat messages:", messagesError);
-          // Continue anyway - this is not critical
-        }
-        
-        console.log("Deleting chat conversations...");
-        const { error: conversationsError } = await supabase
-          .from("chat_conversations")
-          .delete()
-          .eq("user_id", id);
-        
-        if (conversationsError) {
-          console.error("Error deleting chat conversations:", conversationsError);
-          // Continue anyway - this is not critical
-        }
-        
-        // STEP 2: Delete user profile FIRST to free up the email immediately
-        console.log("Deleting user profile...");
-        const { error: profileError } = await supabase
-          .from("user_profiles")
-          .delete()
-          .eq("id", id);
-        
-        if (profileError) {
-          console.error("Error deleting profile:", profileError);
-          return false;
-        }
-        
-        console.log("Profile deleted successfully - email is now available for reuse");
-
-        // STEP 3: Delete auth user AFTER profile deletion
-        // Add a small delay to ensure profile deletion is propagated
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        console.log("Deleting auth user...");
-        const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(id);
-        
-        if (authError) {
-          console.error("Error deleting auth user:", authError);
-          // The profile is already deleted, so the email is available for reuse
-          console.log("Auth user deletion failed, but profile was deleted - email is available for reuse");
-        } else {
-          console.log("Auth user deleted successfully");
-        }
-
-        // STEP 4: Verify cleanup by checking if email is truly available
-        const { data: verifyProfile, error: verifyError } = await supabase
-          .from("user_profiles")
-          .select("email")
-          .eq("email", userProfile.email.toLowerCase())
-          .maybeSingle();
-        
-        if (verifyError && verifyError.code !== 'PGRST116') {
-          console.warn("Could not verify profile deletion:", verifyError);
-        } else if (verifyProfile) {
-          console.error("Profile still exists after deletion - this should not happen");
-          return false;
-        } else {
-          console.log("Verified: Profile completely removed from database");
-        }
-
-        console.log(`User ${userProfile.email} deleted completely and email is confirmed available for reuse`);
-        return true;
-        
-      } catch (deleteError) {
-        console.error("Error during user deletion process:", deleteError);
-        return false;
-      }
+      const result = await response.json()
+      return response.ok
     } catch (error) {
-      console.error("Error deleting user:", error);
-      return false;
+      console.error("Error deleting user:", error)
+      return false
     }
   }
 
   const resetUserPassword = async (id: string) => {
     if (!user?.isAdmin) {
-      console.error("Unauthorized access to resetUserPassword");
-      return null;
+      return null
     }
 
     try {
-      console.log("Resetting password for user ID:", id);
-      // Generate random password
-      const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8).toUpperCase()
-      
-      // Update auth user password with admin client
-      const { error } = await supabaseAdmin.auth.admin.updateUserById(id, {
-        password: tempPassword,
+      const response = await fetch(`/api/admin/users/${id}/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
       })
-
-      if (error) {
-        console.error("Error resetting password:", error)
+      
+      const result = await response.json()
+      
+      if (!response.ok) {
         return null
       }
-
-      // Update profile to indicate temporary password
-      // Commented out until column is added
-      // await supabase.from("user_profiles").update({
-      //   temporary_password: true,
-      // }).eq("id", id)
-
-      return tempPassword
+      
+      return result.password
     } catch (error) {
       console.error("Error resetting password:", error)
       return null
@@ -839,14 +719,12 @@ export function useAuth() {
 
   return {
     user,
-    isAuthenticated: !!user,
+    isAuthenticated,
     isLoading,
     login,
     logout,
     signUp,
     updateUser,
-    changePassword,
-    requestPasswordReset,
     getAllUsers,
     updateUserById,
     createUser,

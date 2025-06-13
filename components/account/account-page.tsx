@@ -247,29 +247,47 @@ export function AccountPage() {
     setIsPasswordChanging(true);
     
     try {
-      // First verify the current password by attempting to sign in
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email: user.email,
-        password: passwordForm.currentPassword,
+      // Use the same verification method as the login system
+      // First verify the current password using our custom API
+      const verificationResponse = await fetch('/api/auth/verify-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          email: user.email, 
+          password: passwordForm.currentPassword 
+        }),
       });
       
-      if (signInError) {
+      const verificationResult = await verificationResponse.json();
+      
+      if (!verificationResponse.ok || !verificationResult.success) {
         setPasswordError("Current password is incorrect");
         setIsPasswordChanging(false);
         return;
       }
       
-      // Use the supabase client directly to update the password
-      const { error } = await supabase.auth.updateUser({
-        password: passwordForm.newPassword,
+      // Now change the password using the auth email
+      const changeResponse = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          authEmail: verificationResult.authEmail,
+          newPassword: passwordForm.newPassword 
+        }),
       });
       
-      if (error) {
-        setPasswordError(error.message || "Failed to update password");
+      const changeResult = await changeResponse.json();
+      
+      if (!changeResponse.ok || !changeResult.success) {
+        setPasswordError(changeResult.error || "Failed to update password");
       } else {
         toast({
           title: "Password Updated",
-          description: "Your password has been successfully changed.",
+          description: "Your password has been successfully changed. You can now login with your new password.",
         });
         
         // Reset form

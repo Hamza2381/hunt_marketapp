@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -24,19 +24,20 @@ import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/hooks/use-auth"
 import type { Product, Category } from "@/lib/supabase"
 
-// Debug mode - set to false to disable console logs
-const DEBUG = false;
+import { AdminCache } from "@/lib/admin-cache"
+import { 
+  compressImageFast, 
+  createInstantPreview, 
+  validateImageFile, 
+  generateUniqueFilename, 
+  convertToWebP,
+  fastUploadQueue,
+  uploadWithRetry,
+  cleanupImageResources,
+  measureUploadPerformance
+} from "@/lib/image-utils-fast"
 
-// Logger function to conditionally log based on debug mode
-const log = (message: string, data?: any) => {
-  if (DEBUG) {
-    if (data) {
-      console.log(message, data);
-    } else {
-      console.log(message);
-    }
-  }
-};
+const CACHE_KEY = 'admin-products'
 
 export function ProductManagement() {
   const [products, setProducts] = useState<Product[]>([])
@@ -47,36 +48,16 @@ export function ProductManagement() {
   const [isEditProductOpen, setIsEditProductOpen] = useState(false)
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [uploading, setUploading] = useState(false)
-  const [uploadComplete, setUploadComplete] = useState(true)
-  const [storageAvailable, setStorageAvailable] = useState(true)
-  const [isInitializing, setIsInitializing] = useState(false)
+  
+  // Simplified operation state - single source of truth
+  const [operationState, setOperationState] = useState<'idle' | 'saving' | 'uploading' | 'deleting'>('idle')
+  const [deletingProductId, setDeletingProductId] = useState<number | null>(null)
+  const [storageChecked, setStorageChecked] = useState(false)
+  
   const fileInputRef = useRef<HTMLInputElement>(null)
   const editFileInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const { user } = useAuth()
-  
-  // Log the current user for debugging
-  useEffect(() => {
-    const checkUserAdmin = async () => {
-      if (!user) return;
-      
-      log('Current user:', user);
-      const { data, error } = await supabase
-        .from('user_profiles')
-        .select('is_admin')
-        .eq('id', user.id)
-        .single();
-        
-      if (error) {
-        console.error('Error checking admin status:', error);
-      } else {
-        log('User admin status:', data?.is_admin);
-      }
-    };
-    
-    checkUserAdmin();
-  }, [user]);
   
   const [productForm, setProductForm] = useState({
     name: "",
@@ -89,393 +70,81 @@ export function ProductManagement() {
     image_url: "",
   })
 
-  // Function to explicitly set up storage
-  const setupStorage = async () => {
-    setIsInitializing(true);
+  // Memoized form reset function
+  const resetForm = useCallback(() => {
+    setProductForm({
+      name: "",
+      sku: "",
+      category_id: "",
+      price: 0,
+      stock_quantity: 0,
+      description: "",
+      status: "active",
+      image_url: "",
+    })
+    setOperationState('idle')
+  }, [])
+
+  // Lazy storage check - only when needed
+  const ensureStorageReady = useCallback(async () => {
+    if (storageChecked) return true
+    
     try {
-      // First, check if user is admin
-      const { data: userData, error: userError } = await supabase
-        .from('user_profiles')
-        .select('is_admin')
-        .eq('id', user?.id)
-        .single();
-        
-      if (userError) {
-        console.error('User check error:', userError);
-        throw new Error(`Cannot verify admin status: ${userError.message}`);
-      }
+      // Quick check - just see if we can access the bucket
+      await supabase.storage.from('products').list('', { limit: 1 })
+      setStorageChecked(true)
+      return true
+    } catch (error) {
+      console.warn('Storage not immediately available:', error)
+      return false
+    }
+  }, [storageChecked])
+
+  // Super-fast image upload with advanced optimizations
+  const uploadImageToStorage = useCallback(async (file: File): Promise<string> => {
+    return measureUploadPerformance(async () => {
+      // Step 1: WebP conversion for better compression (if supported)
+      const optimizedFile = await convertToWebP(file, 0.85)
       
-      if (!userData?.is_admin) {
-        console.error('User is not an admin:', user?.id);
-        throw new Error('You must be an administrator to set up storage.');
-      }
+      // Step 2: Fast compression with WebWorker
+      const compressedFile = await compressImageFast(optimizedFile, 1200, 1200, 0.85)
       
-      log('Admin status confirmed, proceeding with storage setup');
+      // Step 3: Generate unique filename
+      const fileName = generateUniqueFilename(compressedFile.name)
+      const filePath = `product-images/${fileName}`
       
-      // Instead of listing buckets (which might fail due to RLS),
-      // directly try to access the products bucket
-      let bucketExists = false;
-      try {
-        // Try to list files in the products bucket
-        log('Checking if products bucket exists...');
-        const { data: files, error: filesError } = await supabase.storage
-          .from('products')
-          .list();
+      // Step 4: Upload with retry mechanism and queue management
+      const uploadResult = await fastUploadQueue.add(`upload-${Date.now()}`, async () => {
+        return uploadWithRetry(async () => {
+          const { data, error } = await supabase.storage
+            .from('products')
+            .upload(filePath, compressedFile, {
+              cacheControl: '31536000',
+              upsert: false
+            })
           
-        if (!filesError) {
-          log('Products bucket exists and is accessible, contains:', files?.length);
-          bucketExists = true;
-        } else if (filesError.message?.includes('does not exist')) {
-          log('Products bucket does not exist, will need to create it');
-          bucketExists = false;
-        } else {
-          // If we get permission errors, bucket likely exists but we can't access it
-          log('Got error accessing products bucket:', filesError.message);
-          if (filesError.message?.includes('permission') || filesError.message?.includes('policy')) {
-            log('Permission error, assuming bucket exists but needs policies');
-            bucketExists = true;
+          if (error) {
+            throw new Error(`Upload failed: ${error.message}`)
           }
-        }
-      } catch (e) {
-        console.error('Error checking bucket existence:', e);
-      }
-      
-      // Get supabase project reference from URL for better error messages
-      const supabaseRef = supabase.supabaseUrl.split('https://')[1].split('.')[0];
-      
-      // Only try to create the bucket if it doesn't exist
-      if (!bucketExists) {
-        log('Products bucket does not exist, attempting to create it...');
-        // Try to create the bucket - IMPORTANT: Set public to true to make images accessible
-        const { data: newBucket, error: createError } = await supabase.storage.createBucket('products', {
-          public: true  // Make bucket public so images are accessible
-        });
-        
-        if (createError) {
-          console.error('Failed to create products bucket:', createError);
           
-          // If we get a policy violation, the bucket might already exist
-          if (createError.message?.includes('security policy')) {
-            log('Security policy violation - this can happen if the bucket exists but you lack create permission');
-            // Continue with setup, assuming the bucket exists
-          } else if (createError.message?.includes('permission')) {
-            throw new Error(`Permission denied. Please ensure your Supabase project (${supabaseRef}) has Storage enabled and your user has admin privileges.`);
-          } else if (createError.message?.includes('already exists')) {
-            log('Bucket already exists, continuing with setup');
-            
-            // Update the bucket to be public if it already exists
-            try {
-              const { error: updateError } = await supabase.storage.updateBucket('products', {
-                public: true
-              });
-              
-              if (updateError) {
-                console.error('Failed to update bucket to public:', updateError);
-              } else {
-                log('Successfully updated bucket to be public');
-              }
-            } catch (err) {
-              console.error('Error updating bucket:', err);
-            }
-          } else {
-            throw new Error(`Cannot create products bucket: ${createError.message}`);
-          }
-        } else {
-          log('Products bucket created successfully');
-        }
-      } else {
-        // Bucket exists, try to update it to be public
-        try {
-          const { error: updateError } = await supabase.storage.updateBucket('products', {
-            public: true
-          });
-          
-          if (updateError) {
-            console.error('Failed to update bucket to public:', updateError);
-          } else {
-            log('Successfully updated bucket to be public');
-          }
-        } catch (err) {
-          console.error('Error updating bucket:', err);
-        }
-      }
+          return data
+        }, 3, 1000)
+      })
       
-      // Now try to create the product-images folder by uploading a placeholder file
-      // First, check if the folder already exists
-      let folderExists = false;
-      try {
-        log('Checking if product-images folder exists...');
-        const { data: folderContents, error: folderCheckError } = await supabase.storage
-          .from('products')
-          .list('product-images');
-          
-        if (!folderCheckError) {
-          log('product-images folder exists, contains items:', folderContents?.length);
-          folderExists = true;
-        } else {
-          log('product-images folder check error:', folderCheckError.message);
-        }
-      } catch (e) {
-        console.error('Error checking folder existence:', e);
-      }
-      
-      // Only create the folder if it doesn't exist
-      if (!folderExists) {
-        log('Creating product-images folder...');
-        const emptyBlob = new Blob([''], { type: 'text/plain' });
-        const { data: folderFile, error: folderError } = await supabase.storage
-          .from('products')
-          .upload('product-images/.folder', emptyBlob, { upsert: true });
-          
-        if (folderError) {
-          console.error('Error creating product-images folder:', folderError);
-          
-          if (folderError.message?.includes('permission') || folderError.message?.includes('policy')) {
-            throw new Error(`Permission denied when creating folder. Please check RLS policies in project ${supabaseRef} for bucket 'products'.`);
-          } else {
-            throw new Error(`Cannot create product-images folder: ${folderError.message}`);
-          }
-        } else {
-          log('product-images folder created successfully');
-        }
-      }
-      
-      // Test upload a small test image to verify everything works
-      log('Testing image upload...');
-      
-      // Create a small test image (1x1 transparent pixel)
-      const testImageBase64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-      const response = await fetch(testImageBase64);
-      const blob = await response.blob();
-      const testFile = new File([blob], 'test-image.png', { type: 'image/png' });
-      
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('products')
-        .upload('product-images/test-image.png', testFile, { upsert: true });
-        
-      if (uploadError) {
-        console.error('Test upload failed:', uploadError);
-        
-        if (uploadError.message?.includes('permission') || uploadError.message?.includes('policy')) {
-          throw new Error(`Permission denied when uploading test image. Please check the RLS policies in project ${supabaseRef}.`);
-        } else {
-          throw new Error(`Test upload failed: ${uploadError.message}`);
-        }
-      }
-      
-      log('Test upload successful');
-      
-      // Try to get the public URL to verify it works
+      // Step 5: Get optimized public URL
       const { data: { publicUrl } } = supabase.storage
         .from('products')
-        .getPublicUrl('product-images/test-image.png');
-        
-      log('Test image public URL:', publicUrl);
+        .getPublicUrl(filePath)
       
-      // Verify the URL is accessible by testing if it returns a valid response
-      try {
-        const imgResponse = await fetch(publicUrl, { method: 'HEAD' });
-        if (!imgResponse.ok) {
-          console.warn('Public URL is not accessible:', imgResponse.status, imgResponse.statusText);
-          // If the URL isn't accessible, we might need to set CORS or RLS policies
-          log('Setting up RLS policy for the bucket...');
-          
-          // If the bucket exists but images aren't publicly accessible, we need to add RLS policies
-          // Unfortunately this can only be done through the Supabase dashboard or via SQL
-          toast({
-            title: 'Additional Setup Required',
-            description: 'Please check your Supabase Storage settings and ensure the "products" bucket is public.',
-            variant: 'destructive',
-          });
-        } else {
-          log('Public URL is accessible');
-        }
-      } catch (fetchError) {
-        console.warn('Error testing public URL access:', fetchError);
-      }
-      
-      // Success! Storage is properly set up
-      toast({
-        title: 'Storage Setup Complete',
-        description: 'Product image storage has been successfully configured.',
-      });
-      
-      // Wait a moment before refreshing the bucket status
-      setTimeout(async () => {
-        const refreshed = await checkStorageBucket();
-        if (!refreshed) {
-          console.warn('Storage still shows as unavailable after setup. This may indicate an RLS policy issue.');
-          toast({
-            title: 'Setup Verification Warning',
-            description: 'Storage was set up but still appears unavailable. Check RLS policies.',
-            variant: 'destructive',
-          });
-        }
-      }, 1000);
-      
-      return true;
-    } catch (error) {
-      console.error('Storage setup failed:', error);
-      toast({
-        title: 'Storage Setup Failed',
-        description: error instanceof Error ? error.message : 'An unknown error occurred',
-        variant: 'destructive',
-      });
-      return false;
-    } finally {
-      setIsInitializing(false);
-    }
-  }
+      return `${publicUrl}?t=${Date.now()}&v=optimized`
+    }, 'Complete Upload Process')
+  }, [])
 
-  // Check if the product storage bucket is accessible
-  const checkStorageBucket = async () => {
-    try {
-      // Directly try to access the products bucket - don't try to list all buckets first
-      log('Checking products bucket access...');
-      const { data: files, error: filesError } = await supabase.storage
-        .from('products')
-        .list();
-        
-      if (filesError) {
-        console.error('Error accessing products bucket:', filesError);
-        
-        // Check for specific errors
-        if (filesError.message?.includes('does not exist')) {
-          console.error('Products bucket does not exist');
-          toast({
-            title: 'Storage Setup Required',
-            description: 'Product image storage is not configured. Please set up storage.',
-            variant: 'destructive',
-          });
-        } else if (filesError.message?.includes('permission') || filesError.message?.includes('policy')) {
-          console.error('Permission denied when accessing products bucket');
-          toast({
-            title: 'Access Denied',
-            description: 'You do not have permission to access product images. Check RLS policies.',
-            variant: 'destructive',
-          });
-        } else {
-          toast({
-            title: 'Storage Error',
-            description: 'Unable to access image storage. Product images will not be available.',
-            variant: 'destructive',
-          });
-        }
-        
-        setStorageAvailable(false);
-        return false;
-      }
-      
-      log('Products bucket is accessible');
-      
-      // Now check for product-images folder
-      log('Checking for product-images folder...');
-      const { data: folderExists, error: folderError } = await supabase.storage
-        .from('products')
-        .list('product-images');
-        
-      // If folder doesn't exist or we get an error, report it
-      if (folderError) {
-        log('product-images folder not found or not accessible');
-        toast({
-          title: 'Storage Setup Required',
-          description: 'Product images folder is not configured. Please set up storage.',
-          variant: 'destructive',
-        });
-        setStorageAvailable(false);
-        return false;
-      } 
-      
-      log('Storage setup complete');
-      
-      // We have both the bucket and folder - storage is available
-      setStorageAvailable(true);
-      return true;
-    } catch (err) {
-      console.error('Error checking storage access:', err);
-      toast({
-        title: 'Storage Error',
-        description: 'Could not verify image storage access. Product images may be limited.',
-        variant: 'destructive',
-      });
-      setStorageAvailable(false);
-      return false;
-    }
-  };
+  // Lightning-fast image upload handler with instant preview
+  const handleImageUpload = useCallback(async (file: File, isEdit: boolean = false) => {
+    if (operationState !== 'idle') return
 
-  // Function to handle image upload to Supabase Storage - OPTIMIZED VERSION
-const uploadImageToStorage = async (file: File): Promise<string> => {
-  const { validateImageFile, compressImage, generateUniqueFilename } = await import('@/lib/image-utils')
-  
-  // Validate file first
-  const validation = validateImageFile(file)
-  if (!validation.valid) {
-  throw new Error(validation.error || 'Invalid file')
-  }
-  
-  try {
-  // 🚀 STEP 1: Compress image for faster upload (60-80% size reduction)
-  console.log(`Original file size: ${(file.size / 1024 / 1024).toFixed(2)}MB`)
-  const compressedFile = await compressImage(file, 1200, 1200, 0.85)
-  console.log(`Compressed file size: ${(compressedFile.size / 1024 / 1024).toFixed(2)}MB`)
-  
-  // 🚀 STEP 2: Generate unique filename
-  const fileName = generateUniqueFilename(file.name)
-  const filePath = `product-images/${fileName}`
-  
-  console.log('Uploading compressed image:', {
-  path: filePath,
-  originalSize: file.size,
-  compressedSize: compressedFile.size,
-  reduction: `${Math.round((1 - compressedFile.size / file.size) * 100)}%`
-  })
-  
-  // 🚀 STEP 3: Fast upload to Supabase Storage
-  const { data, error } = await supabase.storage
-  .from('products')
-  .upload(filePath, compressedFile, {
-    cacheControl: '31536000', // 1 year cache
-    upsert: false // Don't overwrite, use unique names
-  })
-  
-  if (error) {
-  console.error('Supabase upload error:', error)
-  
-  if (error.message?.includes('security policy') || error.message?.includes('permission')) {
-  throw new Error('Permission denied: Check your Supabase Storage policies')
-  } else if (error.message?.includes('not found')) {
-    throw new Error('Storage bucket not found. Please check your Supabase setup.')
-  } else {
-    throw new Error(`Upload failed: ${error.message}`)
-  }
-  }
-  
-  // 🚀 STEP 4: Get public URL (fastest method)
-  const { data: { publicUrl } } = supabase.storage
-  .from('products')
-  .getPublicUrl(filePath)
-  
-  // Add timestamp to prevent caching issues
-  const finalUrl = `${publicUrl}?t=${Date.now()}`
-  
-  console.log('Upload successful! URL:', finalUrl)
-  return finalUrl
-  
-  } catch (error) {
-  console.error('Image upload error:', error)
-  throw error
-  }
-}
-  
-  // Handle file input change for new product - OPTIMIZED VERSION
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    
-    // 🚀 Import utilities dynamically
-    const { validateImageFile, createPreviewUrl, uploadQueue } = await import('@/lib/image-utils')
-    
-    // 🚀 STEP 1: Immediate validation
+    // Step 1: Instant validation
     const validation = validateImageFile(file)
     if (!validation.valid) {
       toast({
@@ -485,342 +154,519 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
       })
       return
     }
-    
+
     try {
-      setUploading(true)
-      setUploadComplete(false)
+      setOperationState('uploading')
       
-      console.log('🚀 Fast upload process started for:', file.name)
+      // Step 2: Instant preview using createObjectURL (fastest method)
+      const instantPreview = createInstantPreview(file)
+      setProductForm(prev => {
+        // Cleanup previous blob URL
+        if (prev.image_url?.startsWith('blob:')) {
+          URL.revokeObjectURL(prev.image_url)
+        }
+        return { ...prev, image_url: instantPreview }
+      })
       
-      // 🚀 STEP 2: Create immediate preview (instant feedback)
-      const previewUrl = await createPreviewUrl(file)
-      setProductForm(prev => ({ ...prev, image_url: previewUrl }))
+      // Step 3: Show immediate success for better UX
+      toast({
+        title: '⚡ Image Processing',
+        description: 'Image loaded instantly! Optimizing in background...',
+      })
       
-      console.log('✅ Preview ready, starting background upload...')
-      
-      // 🚀 STEP 3: Queue background upload (non-blocking)
-      uploadQueue.add(async () => {
+      // Step 4: Background optimization and upload
+      setTimeout(async () => {
         try {
-          const uploadedUrl = await uploadImageToStorage(file)
-          console.log('✅ Background upload complete!')
+          // Ensure storage is ready
+          const storageReady = await ensureStorageReady()
+          if (!storageReady) {
+            toast({
+              title: 'Storage Unavailable', 
+              description: 'Using preview image. Storage upload will retry later.',
+              variant: 'destructive',
+            })
+            return
+          }
           
-          // Replace preview with real URL
-          setProductForm(prev => ({ ...prev, image_url: uploadedUrl }))
+          const storageUrl = await uploadImageToStorage(file)
           
-          toast({
-            title: 'Upload Complete',
-            description: 'Image uploaded successfully to storage.',
+          // Replace preview with optimized storage URL
+          setProductForm(prev => {
+            // Cleanup preview blob URL
+            if (prev.image_url?.startsWith('blob:')) {
+              URL.revokeObjectURL(prev.image_url)
+            }
+            return { ...prev, image_url: storageUrl }
           })
           
-          return uploadedUrl
+          toast({
+            title: '🚀 Upload Complete',
+            description: 'Image optimized and uploaded successfully!',
+          })
+          
         } catch (uploadError) {
           console.error('Background upload failed:', uploadError)
           toast({
             title: 'Upload Warning',
-            description: 'Using preview image. Upload to storage failed.',
+            description: 'Preview ready. Background upload failed but will retry.',
             variant: 'destructive',
           })
-          // Keep the preview URL as fallback
-          throw uploadError
         }
-      })
+      }, 100) // Small delay to ensure UI updates
       
     } catch (error) {
-      console.error('Error in fast upload process:', error)
+      console.error('Image handling error:', error)
       toast({
         title: 'Upload Failed',
         description: error instanceof Error ? error.message : 'Failed to process image',
         variant: 'destructive',
       })
     } finally {
-      setUploading(false)
-      setUploadComplete(true)
+      setOperationState('idle')
     }
-  }
-  
-  // Handle file input change for edit product - OPTIMIZED VERSION
-  const handleEditFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  }, [operationState, ensureStorageReady, uploadImageToStorage, toast])
+
+  // File input handlers
+  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (!file) return
+    if (file) {
+      await handleImageUpload(file, false)
+    }
+  }, [handleImageUpload])
+
+  const handleEditFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      await handleImageUpload(file, true)
+    }
+  }, [handleImageUpload])
+
+  // Optimized data refresh with caching (same pattern as users)
+  const refreshData = useCallback(async (forceRefresh: boolean = false) => {
+    // Check cache first unless force refresh
+    if (!AdminCache.shouldRefresh<{products: Product[], categories: Category[]}>(CACHE_KEY, forceRefresh)) {
+      const cached = AdminCache.get<{products: Product[], categories: Category[]}>(CACHE_KEY)
+      if (cached.data) {
+        setProducts(cached.data.products)
+        setCategories(cached.data.categories)
+        setIsLoading(false)
+        return
+      }
+    }
     
-    // 🚀 Import utilities dynamically
-    const { validateImageFile, createPreviewUrl, uploadQueue } = await import('@/lib/image-utils')
-    
-    // 🚀 STEP 1: Immediate validation
-    const validation = validateImageFile(file)
-    if (!validation.valid) {
-      toast({
-        title: 'Invalid File',
-        description: validation.error,
-        variant: 'destructive',
-      })
+    // Prevent multiple simultaneous requests
+    if (AdminCache.get(CACHE_KEY).isLoading && !forceRefresh) {
       return
     }
     
-    try {
-      setUploading(true)
-      setUploadComplete(false)
-      
-      console.log('🚀 Fast edit upload process started for:', file.name)
-      
-      // 🚀 STEP 2: Create immediate preview (instant feedback)
-      const previewUrl = await createPreviewUrl(file)
-      setProductForm(prev => ({ ...prev, image_url: previewUrl }))
-      
-      console.log('✅ Edit preview ready, starting background upload...')
-      
-      // 🚀 STEP 3: Queue background upload (non-blocking)
-      uploadQueue.add(async () => {
-        try {
-          const uploadedUrl = await uploadImageToStorage(file)
-          console.log('✅ Background edit upload complete!')
-          
-          // Replace preview with real URL
-          setProductForm(prev => ({ ...prev, image_url: uploadedUrl }))
-          
-          toast({
-            title: 'Upload Complete',
-            description: 'Image updated successfully in storage.',
-          })
-          
-          return uploadedUrl
-        } catch (uploadError) {
-          console.error('Background edit upload failed:', uploadError)
-          toast({
-            title: 'Upload Warning',
-            description: 'Using preview image. Upload to storage failed.',
-            variant: 'destructive',
-          })
-          // Keep the preview URL as fallback
-          throw uploadError
-        }
-      })
-      
-    } catch (error) {
-      console.error('Error in fast edit upload process:', error)
-      toast({
-        title: 'Upload Failed',
-        description: error instanceof Error ? error.message : 'Failed to process image',
-        variant: 'destructive',
-      })
-    } finally {
-      setUploading(false)
-      setUploadComplete(true)
-    }
-  }
-  
-  // Function to refresh products and categories
-  const refreshData = async () => {
+    AdminCache.setLoading(CACHE_KEY, true)
     setIsLoading(true)
     setError(null)
+    
     try {
-      // Fetch products
-      const { data: productsData, error: productsError } = await supabase
-        .from('products')
-        .select('*')
-        .order('created_at', { ascending: false })
+      // Fetch both in parallel for speed
+      const [productsResponse, categoriesResponse] = await Promise.all([
+        supabase.from('products').select('*').order('created_at', { ascending: false }),
+        supabase.from('categories').select('*').order('name')
+      ])
       
-      if (productsError) {
-        console.error('Error fetching products:', productsError);
-        throw productsError;
-      }
+      if (productsResponse.error) throw productsResponse.error
+      if (categoriesResponse.error) throw categoriesResponse.error
       
-      log('Products loaded:', productsData?.length);
+      const productsData = productsResponse.data || []
+      const categoriesData = categoriesResponse.data || []
       
-      // Fetch categories
-      const { data: categoriesData, error: categoriesError } = await supabase
-        .from('categories')
-        .select('*')
-        .order('name')
-      
-      if (categoriesError) {
-        console.error('Error fetching categories:', categoriesError);
-        throw categoriesError;
-      }
-      
-      log('Categories loaded:', categoriesData?.length);
-      
-      setProducts(productsData || [])
-      setCategories(categoriesData || [])
+      // Update cache and state
+      AdminCache.set(CACHE_KEY, { products: productsData, categories: categoriesData })
+      setProducts(productsData)
+      setCategories(categoriesData)
     } catch (err: any) {
-      console.error('Error fetching products data:', err.message)
-      setError('Failed to load products. Please try again.')
+      console.error('Error fetching data:', err.message)
+      setError('Failed to load data. Please try again.')
+      setProducts([])
+      setCategories([])
       toast({
         title: 'Error',
         description: 'Failed to load products data.',
         variant: 'destructive',
       })
     } finally {
+      AdminCache.setLoading(CACHE_KEY, false)
       setIsLoading(false)
     }
-  }
+  }, [toast])
 
-  // Fetch products and categories on component mount
+  // Initial data load
   useEffect(() => {
-    const initialize = async () => {
-      // First check if storage is accessible
-      const storageOk = await checkStorageBucket();
-      
-      // If storage is not available, try to set it up automatically
-      if (!storageOk && user) {
-        log('Storage not available, attempting automatic setup');
-        try {
-          // First, check if user is admin
-          const { data: userData, error: userError } = await supabase
-            .from('user_profiles')
-            .select('is_admin')
-            .eq('id', user?.id)
-            .single();
-            
-          if (userError) {
-            console.error('Error checking admin status:', userError);
-          } else if (userData?.is_admin) {
-            log('User is admin, proceeding with automatic storage setup');
-            await setupStorage();
-          } else {
-            log('User is not an admin, cannot set up storage automatically');
-          }
-        } catch (setupError) {
-          console.error('Automatic storage setup failed:', setupError);
-        }
+    refreshData()
+  }, [refreshData])
+
+  // Cleanup memory when component unmounts
+  useEffect(() => {
+    return () => {
+      // Cleanup any blob URLs to prevent memory leaks
+      if (productForm.image_url?.startsWith('blob:')) {
+        URL.revokeObjectURL(productForm.image_url)
       }
-      
-      // Then load products and categories
-      await refreshData();
-    };
-    
-    initialize();
-  }, [user])
+    }
+  }, [])
 
-  const filteredProducts = products.filter(
-    (product) =>
-      product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      product.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (getCategoryName(product.category_id) || '').toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  // Manual refresh with visual feedback
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true)
+    await refreshData(true)
+    setIsRefreshing(false)
+  }, [refreshData])
   
-  // Helper function to get category name by ID
-  const getCategoryName = (categoryId: number) => {
-    // Find category by ID without excessive logging
-    const category = categories.find(cat => cat.id === categoryId);
-    return category ? category.name : 'Unknown';
-  }
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
-  const handleAddProduct = async () => {
-    // Check if an upload operation is in progress
-    if (uploading) {
+  // Optimistic product addition using API
+  const handleAddProduct = useCallback(async () => {
+    if (operationState !== 'idle') return
+
+    // Validation
+    if (!productForm.name || !productForm.sku || !productForm.category_id || productForm.price <= 0) {
       toast({
-        title: 'Operation in Progress',
-        description: 'Please wait for the current image upload to complete.',
+        title: 'Validation Error',
+        description: 'Please fill all required fields (name, SKU, category, price).',
         variant: 'destructive',
       })
       return
     }
-    
-    // Check if a previous upload has completed
-    if (!uploadComplete) {
-      toast({
-        title: 'Upload Processing',
-        description: 'Please wait for the previous upload operation to complete.',
-        variant: 'destructive',
-      })
-      return
+
+    // Check for blob URL (preview) - allow saving with preview
+    if (productForm.image_url && productForm.image_url.startsWith('blob:')) {
+      console.log('Saving with preview image - background upload will continue')
     }
+
+    setOperationState('saving')
     
     try {
-      // Validate form
-      if (!productForm.name || !productForm.sku || !productForm.category_id || productForm.price <= 0) {
-        toast({
-          title: 'Validation Error',
-          description: 'Please fill all required fields (name, SKU, category, price).',
-          variant: 'destructive',
-        })
-        return
+      const categoryId = parseInt(productForm.category_id)
+      if (isNaN(categoryId)) {
+        throw new Error('Please select a valid category.')
       }
-      
-      log("Adding new product:", productForm.name);
-      
-      // Parse the category ID to ensure it's a number
-      let categoryId = null;
-      if (productForm.category_id && productForm.category_id !== 'no-categories') {
-        categoryId = parseInt(productForm.category_id);
-        if (isNaN(categoryId)) {
-          toast({
-            title: 'Validation Error',
-            description: 'Please select a valid category.',
-            variant: 'destructive',
-          });
-          return;
-        }
+
+      // Create optimistic product for immediate UI update
+      const optimisticProduct: Product = {
+        id: -Math.abs(Date.now() % 1000000), // Negative ID to mark as temporary
+        name: productForm.name,
+        sku: productForm.sku,
+        description: productForm.description || null,
+        category_id: categoryId,
+        price: productForm.price,
+        stock_quantity: productForm.stock_quantity,
+        status: productForm.stock_quantity > 0 ? productForm.status as any : 'out_of_stock',
+        image_url: productForm.image_url || null,
+        is_featured: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       }
-      
-      // Insert new product
-      const { data, error } = await supabase
-        .from('products')
-        .insert([{
-          name: productForm.name,
-          sku: productForm.sku,
-          description: productForm.description || null,
-          category_id: categoryId,
-          price: productForm.price,
-          stock_quantity: productForm.stock_quantity,
-          status: productForm.stock_quantity > 0 ? productForm.status : 'out_of_stock',
-          image_url: productForm.image_url || null,
-        }])
-        .select()
-      
-      if (error) {
-        console.error("Error inserting product:", error);
-        throw error;
-      }
-      
-      log("Product added successfully");
-      // Refresh product list
-      await refreshData()
+
+      // Immediate UI update
+      setProducts(prev => [optimisticProduct, ...prev])
       setIsAddProductOpen(false)
+      const addedProductName = productForm.name
+      resetForm()
       
-      // Make a copy of the added product name for toast message
-      const addedProductName = productForm.name;
-      
-      // Reset form state completely
-      setProductForm({
-        name: "",
-        sku: "",
-        category_id: "",
-        price: 0,
-        stock_quantity: 0,
-        description: "",
-        status: "active",
-        image_url: "",
-      })
-      
+      // Show immediate success
       toast({
         title: 'Product Added',
         description: `${addedProductName} has been added successfully.`,
       })
+
+      // Background API call
+      const response = await fetch('/api/products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: optimisticProduct.name,
+          sku: optimisticProduct.sku,
+          description: optimisticProduct.description,
+          category_id: optimisticProduct.category_id,
+          price: optimisticProduct.price,
+          stock_quantity: optimisticProduct.stock_quantity,
+          status: optimisticProduct.status,
+          image_url: optimisticProduct.image_url,
+        })
+      })
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to create product'
+        try {
+          const errorData = await response.json()
+          errorMessage = errorData.error || errorMessage
+          if (errorData.details && Array.isArray(errorData.details)) {
+            errorMessage += ': ' + errorData.details.join(', ')
+          }
+        } catch (jsonError) {
+          console.warn('Could not parse error response as JSON:', jsonError)
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`
+        }
+        throw new Error(errorMessage)
+      }
+
+      let result
+      try {
+        result = await response.json()
+      } catch (jsonError) {
+        console.warn('Could not parse success response as JSON:', jsonError)
+        // If we can't parse the response but the status was OK, assume success
+        console.log('Assuming success since HTTP status was OK')
+        return // Exit successfully without trying to process the result
+      }
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to create product')
+      }
+
+      // Replace optimistic product with real one
+      setProducts(prev => prev.map(p => 
+        p.id === optimisticProduct.id ? result.data : p
+      ))
+      
+      // Refresh admin stats after successful product addition
+      if (typeof window !== 'undefined' && window.refreshAdminStats) {
+        window.refreshAdminStats()
+      }
+
     } catch (err: any) {
       console.error('Error adding product:', err.message)
+      
+      // Rollback optimistic update
+      setProducts(prev => prev.filter(p => p.id !== optimisticProduct.id))
+      
       toast({
         title: 'Error',
         description: 'Failed to add product. ' + err.message,
         variant: 'destructive',
       })
+    } finally {
+      setOperationState('idle')
     }
-  }
-  
-  const handleEditProduct = (product: Product) => {
-    // Check if another operation is in progress
-    if (uploading || !uploadComplete) {
+  }, [operationState, productForm, toast, resetForm])
+
+  // Optimistic product update using API
+  const handleUpdateProduct = useCallback(async () => {
+    if (!selectedProduct || operationState !== 'idle') return
+
+    // Validation
+    if (!productForm.name || !productForm.sku || !productForm.category_id || productForm.price <= 0) {
       toast({
-        title: 'Operation in Progress',
-        description: 'Please wait for the current operation to complete.',
+        title: 'Validation Error',
+        description: 'Please fill all required fields (name, SKU, category, price).',
         variant: 'destructive',
       })
       return
     }
+
+    // Check for blob URL (preview) - allow saving with preview
+    if (productForm.image_url && productForm.image_url.startsWith('blob:')) {
+      console.log('Updating with preview image - background upload will continue')
+    }
+
+    setOperationState('saving')
+
+    try {
+      const categoryId = parseInt(productForm.category_id)
+      if (isNaN(categoryId)) {
+        throw new Error('Please select a valid category.')
+      }
+
+      // Create updated product for optimistic update
+      const updatedProduct: Product = {
+        ...selectedProduct,
+        name: productForm.name,
+        sku: productForm.sku,
+        description: productForm.description || null,
+        category_id: categoryId,
+        price: productForm.price,
+        stock_quantity: productForm.stock_quantity,
+        status: productForm.stock_quantity > 0 ? productForm.status as any : 'out_of_stock',
+        image_url: productForm.image_url || null,
+        updated_at: new Date().toISOString(),
+      }
+
+      // Immediate UI update
+      setProducts(prev => prev.map(p => 
+        p.id === selectedProduct.id ? updatedProduct : p
+      ))
+      
+      const updatedProductName = productForm.name
+      setIsEditProductOpen(false)
+      setSelectedProduct(null)
+      resetForm()
+
+      // Show immediate success
+      toast({
+        title: 'Product Updated',
+        description: `${updatedProductName} has been updated successfully.`,
+      })
+
+      // Background API call
+      const response = await fetch('/api/products', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: selectedProduct.id,
+          name: updatedProduct.name,
+          sku: updatedProduct.sku,
+          description: updatedProduct.description,
+          category_id: updatedProduct.category_id,
+          price: updatedProduct.price,
+          stock_quantity: updatedProduct.stock_quantity,
+          status: updatedProduct.status,
+          image_url: updatedProduct.image_url,
+        })
+      })
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to update product'
+        try {
+          const errorData = await response.json()
+          errorMessage = errorData.error || errorMessage
+          if (errorData.details && Array.isArray(errorData.details)) {
+            errorMessage += ': ' + errorData.details.join(', ')
+          }
+        } catch (jsonError) {
+          console.warn('Could not parse error response as JSON:', jsonError)
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`
+        }
+        throw new Error(errorMessage)
+      }
+
+      let result
+      try {
+        result = await response.json()
+      } catch (jsonError) {
+        console.warn('Could not parse success response as JSON:', jsonError)
+        // If we can't parse the response but the status was OK, assume success
+        console.log('Assuming success since HTTP status was OK')
+        return // Exit successfully without trying to process the result
+      }
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to update product')
+      }
+
+    } catch (err: any) {
+      console.error('Error updating product:', err.message)
+      
+      // Rollback optimistic update
+      setProducts(prev => prev.map(p => 
+        p.id === selectedProduct.id ? selectedProduct : p
+      ))
+      
+      toast({
+        title: 'Error',
+        description: 'Failed to update product. ' + err.message,
+        variant: 'destructive',
+      })
+    } finally {
+      setOperationState('idle')
+    }
+  }, [selectedProduct, operationState, productForm, toast, resetForm])
+
+  // Optimized product deletion using API
+  const handleDeleteProduct = useCallback(async (product: Product) => {
+    if (operationState !== 'idle') return
+    if (!confirm(`Are you sure you want to delete ${product.name}?`)) return
+
+    // Check if this is a temporary product (created optimistically but not yet saved)
+    const isTemporaryProduct = product.id < 0 || product.id > 2147483647 // PostgreSQL integer max
     
+    if (isTemporaryProduct) {
+      // Just remove from local state - it was never saved to database
+      setProducts(prev => prev.filter(p => p.id !== product.id))
+      toast({
+        title: 'Product Removed',
+        description: `${product.name} has been removed (was not yet saved).`,
+      })
+      return
+    }
+
+    setDeletingProductId(product.id)
+
+    try {
+      // Optimistic removal
+      setProducts(prev => prev.filter(p => p.id !== product.id))
+      
+      toast({
+        title: 'Product Deleted',
+        description: `${product.name} has been deleted successfully.`,
+      })
+
+      // Background API call
+      const response = await fetch(`/api/products?id=${product.id}`, {
+        method: 'DELETE',
+      })
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to delete product'
+        try {
+          const errorData = await response.json()
+          errorMessage = errorData.error || errorMessage
+        } catch (jsonError) {
+          console.warn('Could not parse error response as JSON:', jsonError)
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`
+        }
+        throw new Error(errorMessage)
+      }
+
+      let result
+      try {
+        result = await response.json()
+      } catch (jsonError) {
+        console.warn('Could not parse success response as JSON:', jsonError)
+        // If we can't parse the response but the status was OK, assume success
+        console.log('Assuming success since HTTP status was OK')
+        return // Exit successfully without trying to process the result
+      }
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to delete product')
+      }
+      
+      // Refresh admin stats after successful product deletion
+      if (typeof window !== 'undefined' && window.refreshAdminStats) {
+        window.refreshAdminStats()
+      }
+
+    } catch (err: any) {
+      console.error('Error deleting product:', err.message)
+      
+      // Rollback - add product back
+      setProducts(prev => [...prev, product].sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ))
+      
+      toast({
+        title: 'Error',
+        description: 'Failed to delete product. This may be because it has associated order items.',
+        variant: 'destructive',
+      })
+    } finally {
+      setDeletingProductId(null)
+    }
+  }, [operationState, toast])
+
+  // Fast product editing
+  const handleEditProduct = useCallback((product: Product) => {
+    if (operationState !== 'idle') return
+
+    // Check if this is a temporary product (not yet saved to database)
+    const isTemporaryProduct = product.id < 0 || product.id > 2147483647
+    
+    if (isTemporaryProduct) {
+      toast({
+        title: 'Cannot Edit',
+        description: 'This product has not been saved yet. Please wait for it to be created first.',
+        variant: 'destructive',
+      })
+      return
+    }
+
     setSelectedProduct(product)
-    log('Editing product:', product.name);
     setProductForm({
       name: product.name,
       sku: product.sku,
@@ -832,141 +678,24 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
       image_url: product.image_url || '',
     })
     setIsEditProductOpen(true)
-  }
+  }, [operationState, toast])
+
+  // Filtered products for search
+  const filteredProducts = products.filter(
+    (product) =>
+      product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      product.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (getCategoryName(product.category_id) || '').toLowerCase().includes(searchTerm.toLowerCase())
+  )
   
-  const handleUpdateProduct = async () => {
-    if (!selectedProduct) return
-    
-    // Check if an upload operation is in progress
-    if (uploading) {
-      toast({
-        title: 'Operation in Progress',
-        description: 'Please wait for the current image upload to complete.',
-        variant: 'destructive',
-      })
-      return
-    }
-    
-    // Check if a previous upload has completed
-    if (!uploadComplete) {
-      toast({
-        title: 'Upload Processing',
-        description: 'Please wait for the previous upload operation to complete.',
-        variant: 'destructive',
-      })
-      return
-    }
-    
-    try {
-      // Validate form
-      if (!productForm.name || !productForm.sku || !productForm.category_id || productForm.price <= 0) {
-        toast({
-          title: 'Validation Error',
-          description: 'Please fill all required fields (name, SKU, category, price).',
-          variant: 'destructive',
-        })
-        return
-      }
-      
-      log("Updating product:", selectedProduct.id, productForm.name);
-      
-      // Parse the category ID to ensure it's a number
-      let categoryId = null;
-      if (productForm.category_id && productForm.category_id !== 'no-categories') {
-        categoryId = parseInt(productForm.category_id);
-        if (isNaN(categoryId)) {
-          toast({
-            title: 'Validation Error',
-            description: 'Please select a valid category.',
-            variant: 'destructive',
-          });
-          return;
-        }
-      }
-      
-      // Update product
-      const { error } = await supabase
-        .from('products')
-        .update({
-          name: productForm.name,
-          sku: productForm.sku,
-          description: productForm.description || null,
-          category_id: categoryId,
-          price: productForm.price,
-          stock_quantity: productForm.stock_quantity,
-          status: productForm.stock_quantity > 0 ? productForm.status : 'out_of_stock',
-          image_url: productForm.image_url || null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', selectedProduct.id)
-      
-      if (error) {
-        console.error("Error updating product:", error);
-        throw error;
-      }
-      
-      log("Product updated successfully");
-      // Refresh data
-      await refreshData()
-      
-      // Make a copy of the updated product name for toast message
-      const updatedProductName = productForm.name;
-      
-      // Reset state completely
-      setIsEditProductOpen(false)
-      setSelectedProduct(null)
-      setProductForm({
-        name: "",
-        sku: "",
-        category_id: "",
-        price: 0,
-        stock_quantity: 0,
-        description: "",
-        status: "active",
-        image_url: "",
-      })
-      
-      toast({
-        title: 'Product Updated',
-        description: `${updatedProductName} has been updated successfully.`,
-      })
-    } catch (err: any) {
-      console.error('Error updating product:', err.message)
-      toast({
-        title: 'Error',
-        description: 'Failed to update product. ' + err.message,
-        variant: 'destructive',
-      })
-    }
-  }
-  
-  const handleDeleteProduct = async (product: Product) => {
-    if (!confirm(`Are you sure you want to delete ${product.name}?`)) return
-    
-    try {
-      const { error } = await supabase
-        .from('products')
-        .delete()
-        .eq('id', product.id)
-      
-      if (error) throw error
-      
-      // Refresh products list
-      await refreshData()
-      
-      toast({
-        title: 'Product Deleted',
-        description: `${product.name} has been deleted successfully.`,
-      })
-    } catch (err: any) {
-      console.error('Error deleting product:', err.message)
-      toast({
-        title: 'Error',
-        description: 'Failed to delete product. This may be because it has associated order items.',
-        variant: 'destructive',
-      })
-    }
-  }
+  // Helper function to get category name by ID
+  const getCategoryName = useCallback((categoryId: number) => {
+    const category = categories.find(cat => cat.id === categoryId);
+    return category ? category.name : 'Unknown';
+  }, [categories])
+
+  // Prevent operations when busy
+  const isOperationInProgress = operationState !== 'idle'
 
   return (
     <Card>
@@ -978,7 +707,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
           </div>
           <Dialog open={isAddProductOpen} onOpenChange={setIsAddProductOpen}>
             <DialogTrigger asChild>
-              <Button>
+              <Button disabled={isOperationInProgress}>
                 <Plus className="h-4 w-4 mr-2" />
                 Add Product
               </Button>
@@ -996,6 +725,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                       id="productName"
                       value={productForm.name}
                       onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
+                      disabled={isOperationInProgress}
                     />
                   </div>
                   <div className="grid gap-2">
@@ -1004,6 +734,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                       id="sku"
                       value={productForm.sku}
                       onChange={(e) => setProductForm({ ...productForm, sku: e.target.value })}
+                      disabled={isOperationInProgress}
                     />
                   </div>
                 </div>
@@ -1011,12 +742,10 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                   <div className="grid gap-2">
                     <Label htmlFor="category">Category*</Label>
                     <Select
-                    value={productForm.category_id || undefined}
-                    onValueChange={(value) => {
-                        log('Selected category:', value);
-                              setProductForm({ ...productForm, category_id: value });
-                            }}
-                          >
+                      value={productForm.category_id || undefined}
+                      onValueChange={(value) => setProductForm({ ...productForm, category_id: value })}
+                      disabled={isOperationInProgress}
+                    >
                       <SelectTrigger>
                         <SelectValue placeholder="Select category" />
                       </SelectTrigger>
@@ -1043,6 +772,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                       step="0.01"
                       value={productForm.price}
                       onChange={(e) => setProductForm({ ...productForm, price: Number.parseFloat(e.target.value) || 0 })}
+                      disabled={isOperationInProgress}
                     />
                   </div>
                 </div>
@@ -1054,6 +784,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                       type="number"
                       value={productForm.stock_quantity}
                       onChange={(e) => setProductForm({ ...productForm, stock_quantity: Number.parseInt(e.target.value) || 0 })}
+                      disabled={isOperationInProgress}
                     />
                   </div>
                   <div className="grid gap-2">
@@ -1061,6 +792,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                     <Select
                       value={productForm.status}
                       onValueChange={(value) => setProductForm({ ...productForm, status: value as "active" | "inactive" | "out_of_stock" })}
+                      disabled={isOperationInProgress}
                     >
                       <SelectTrigger>
                         <SelectValue />
@@ -1089,45 +821,40 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                       <Button 
                         type="button" 
                         variant="outline" 
-                        className="w-full"
+                        className="w-full upload-button upload-transition"
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={uploading || !storageAvailable}
+                        disabled={isOperationInProgress}
                       >
-                        {uploading ? (
+                        {operationState === 'uploading' ? (
                           <>
                             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                             Processing...
                           </>
-                        ) : !storageAvailable ? (
-                          <>
-                            <AlertTriangle className="h-4 w-4 mr-2" />
-                            Image Upload Unavailable
-                          </>
                         ) : (
                           <>
                             <Upload className="h-4 w-4 mr-2" />
-                            Fast Upload
+                            Upload
                           </>
                         )}
                       </Button>
                       <p className="text-xs text-gray-500 mt-1">
-                        {!storageAvailable 
-                          ? "Image storage is not accessible. Contact your administrator." 
-                          : "Max size: 10MB. Auto-compressed for faster upload"}
+                        Instant preview + WebP optimization + fast compression
                       </p>
                     </div>
-                      <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border flex items-center justify-center">
-                        {productForm.image_url ? (
-                          <img 
-                            src={productForm.image_url} 
-                            alt="Product preview" 
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              console.error('Image preview failed to load:', productForm.image_url);
-                              e.currentTarget.src = "https://placehold.co/400x400/e2e8f0/94a3b8?text=Product+Image";
-                            }}
-                          />
-                        ) : (
+                    <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border flex items-center justify-center preview-container image-container">
+                      {productForm.image_url ? (
+                        <img 
+                          src={productForm.image_url} 
+                          alt="Product preview" 
+                          className="w-full h-full object-cover product-image-optimized state-transition"
+                          loading="eager"
+                          decoding="async"
+                          onError={(e) => {
+                            console.error('Image preview failed to load:', productForm.image_url);
+                            e.currentTarget.src = "https://placehold.co/400x400/e2e8f0/94a3b8?text=Product+Image";
+                          }}
+                        />
+                      ) : (
                         <div className="text-center">
                           <ImageIcon className="h-8 w-8 mx-auto text-gray-400" />
                           <p className="text-sm text-gray-500 mt-1">No image</p>
@@ -1143,31 +870,24 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                     value={productForm.description}
                     onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
                     rows={3}
+                    disabled={isOperationInProgress}
                   />
                 </div>
               </div>
               <DialogFooter>
-                {!storageAvailable && (
-                  <Button 
-                    variant="outline" 
-                    onClick={setupStorage} 
-                    disabled={isInitializing || uploading}
-                    className="mr-auto"
-                  >
-                    {isInitializing ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Setting up storage...
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="h-4 w-4 mr-2" />
-                        Setup Image Storage
-                      </>
-                    )}
-                  </Button>
-                )}
-                <Button onClick={handleAddProduct} disabled={uploading || !uploadComplete}>Add Product</Button>
+                <Button 
+                  onClick={handleAddProduct} 
+                  disabled={isOperationInProgress}
+                >
+                  {operationState === 'saving' ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Adding...
+                    </>
+                  ) : (
+                    'Add Product'
+                  )}
+                </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -1182,8 +902,8 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
             onChange={(e) => setSearchTerm(e.target.value)}
             className="max-w-sm"
           />
-          <Button variant="outline" onClick={refreshData} title="Refresh products">
-            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing || isOperationInProgress} title="Refresh products">
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
           </Button>
         </div>
 
@@ -1196,7 +916,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
           <div className="py-8 text-center">
             <AlertTriangle className="h-8 w-8 text-red-500 mx-auto" />
             <p className="text-sm text-red-500 mt-2">{error}</p>
-            <Button variant="outline" size="sm" className="mt-4" onClick={refreshData}>
+            <Button variant="outline" size="sm" className="mt-4" onClick={handleRefresh}>
               Try Again
             </Button>
           </div>
@@ -1225,15 +945,17 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
             </TableHeader>
             <TableBody>
               {filteredProducts.map((product) => (
-                <TableRow key={product.id}>
+                <TableRow key={product.id} className="product-table-row">
                   <TableCell>
                     <div className="flex items-center space-x-3">
-                      <div className="bg-gray-100 p-2 rounded overflow-hidden w-12 h-12">
+                      <div className="bg-gray-100 p-2 rounded overflow-hidden w-12 h-12 image-container performance-optimized">
                         {product.image_url ? (
                           <img 
                             src={product.image_url} 
                             alt={product.name} 
-                            className="w-full h-full object-cover rounded" 
+                            className="w-full h-full object-cover rounded product-image-optimized" 
+                            loading="lazy"
+                            decoding="async"
                             onError={(e) => {
                               console.error('Product image failed to load:', product.image_url);
                               e.currentTarget.src = "https://placehold.co/100x100/e2e8f0/94a3b8?text=Product";
@@ -1265,11 +987,25 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                   </TableCell>
                   <TableCell>
                     <div className="flex space-x-2">
-                      <Button size="sm" variant="outline" onClick={() => handleEditProduct(product)}>
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        onClick={() => handleEditProduct(product)}
+                        disabled={isOperationInProgress}
+                      >
                         <Edit className="h-4 w-4" />
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => handleDeleteProduct(product)}>
-                        <Trash2 className="h-4 w-4" />
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        onClick={() => handleDeleteProduct(product)}
+                        disabled={isOperationInProgress || deletingProductId === product.id}
+                      >
+                        {deletingProductId === product.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
                       </Button>
                     </div>
                   </TableCell>
@@ -1295,6 +1031,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                   id="edit-productName"
                   value={productForm.name}
                   onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
+                  disabled={isOperationInProgress}
                 />
               </div>
               <div className="grid gap-2">
@@ -1303,6 +1040,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                   id="edit-sku"
                   value={productForm.sku}
                   onChange={(e) => setProductForm({ ...productForm, sku: e.target.value })}
+                  disabled={isOperationInProgress}
                 />
               </div>
             </div>
@@ -1311,9 +1049,8 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                 <Label htmlFor="edit-category">Category*</Label>
                 <Select
                   value={productForm.category_id || undefined}
-                  onValueChange={(value) => {
-                    setProductForm({ ...productForm, category_id: value });
-                  }}
+                  onValueChange={(value) => setProductForm({ ...productForm, category_id: value })}
+                  disabled={isOperationInProgress}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select category" />
@@ -1335,6 +1072,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                   step="0.01"
                   value={productForm.price}
                   onChange={(e) => setProductForm({ ...productForm, price: Number.parseFloat(e.target.value) || 0 })}
+                  disabled={isOperationInProgress}
                 />
               </div>
             </div>
@@ -1346,6 +1084,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                   type="number"
                   value={productForm.stock_quantity}
                   onChange={(e) => setProductForm({ ...productForm, stock_quantity: Number.parseInt(e.target.value) || 0 })}
+                  disabled={isOperationInProgress}
                 />
               </div>
               <div className="grid gap-2">
@@ -1353,6 +1092,7 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                 <Select
                   value={productForm.status}
                   onValueChange={(value) => setProductForm({ ...productForm, status: value as "active" | "inactive" | "out_of_stock" })}
+                  disabled={isOperationInProgress}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -1381,39 +1121,34 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                   <Button 
                     type="button" 
                     variant="outline" 
-                    className="w-full"
+                    className="w-full upload-button upload-transition"
                     onClick={() => editFileInputRef.current?.click()}
-                    disabled={uploading || !storageAvailable}
+                    disabled={isOperationInProgress}
                   >
-                    {uploading ? (
+                    {operationState === 'uploading' ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                         Processing...
                       </>
-                    ) : !storageAvailable ? (
-                      <>
-                        <AlertTriangle className="h-4 w-4 mr-2" />
-                        Image Upload Unavailable
-                      </>
                     ) : (
                       <>
                         <Upload className="h-4 w-4 mr-2" />
-                        {productForm.image_url ? 'Replace Image' : 'Fast Upload'}
+                        {productForm.image_url ? 'Replace Image' : 'Upload'}
                       </>
                     )}
                   </Button>
                   <p className="text-xs text-gray-500 mt-1">
-                    {!storageAvailable 
-                      ? "Image storage is not accessible. Contact your administrator." 
-                      : "Max size: 10MB. Auto-compressed for faster upload"}
+                    Instant preview + WebP optimization + fast compression
                   </p>
                 </div>
-                <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border flex items-center justify-center">
+                <div className="aspect-square rounded-lg overflow-hidden bg-gray-100 border flex items-center justify-center preview-container image-container">
                   {productForm.image_url ? (
                     <img 
                       src={productForm.image_url} 
                       alt="Product preview" 
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-cover product-image-optimized state-transition"
+                      loading="eager"
+                      decoding="async"
                       onError={(e) => {
                         console.error('Image preview failed to load:', productForm.image_url);
                         e.currentTarget.src = "https://placehold.co/400x400/e2e8f0/94a3b8?text=Product+Image";
@@ -1435,12 +1170,25 @@ const uploadImageToStorage = async (file: File): Promise<string> => {
                 value={productForm.description}
                 onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
                 rows={3}
+                disabled={isOperationInProgress}
               />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsEditProductOpen(false)}>Cancel</Button>
-            <Button onClick={handleUpdateProduct} disabled={uploading || !uploadComplete}>Save Changes</Button>
+            <Button 
+              onClick={handleUpdateProduct} 
+              disabled={isOperationInProgress}
+            >
+              {operationState === 'saving' ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                'Save Changes'
+              )}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

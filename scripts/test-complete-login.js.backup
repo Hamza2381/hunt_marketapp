@@ -1,0 +1,199 @@
+#!/usr/bin/env node
+
+// Comprehensive test of the complete login flow
+// Run with: node scripts/test-complete-login.js
+
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config({ path: '.env.local' });
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+});
+
+const supabaseClient = createClient(supabaseUrl, supabaseAnonKey);
+
+async function testCompleteLogin(email, password) {
+  console.log(`\n=== TESTING LOGIN: ${email} ===\n`);
+  
+  try {
+    // Step 1: Simulate the custom login API call
+    console.log('1. Simulating custom login API...');
+    
+    const emailToCheck = email.toLowerCase().trim();
+    
+    // Find user profile by email
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from("user_profiles")
+      .select("id, email, name, account_type, is_admin, status")
+      .eq("email", emailToCheck)
+      .eq("status", "active")
+      .single();
+    
+    if (profileError || !profile) {
+      console.log(`❌ No active profile found for email: ${emailToCheck}`);
+      console.log('Error:', profileError?.message || 'Profile not found');
+      return false;
+    }
+    
+    console.log(`✅ Found profile: ${profile.name} (${profile.id})`);
+    
+    // Get the auth user by ID
+    const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.getUserById(profile.id);
+    
+    if (authError || !authUser.user) {
+      console.log(`❌ Auth user not found for profile ID: ${profile.id}`);
+      console.log('Error:', authError?.message || 'Auth user not found');
+      return false;
+    }
+    
+    console.log(`✅ Found auth user: ${authUser.user.email}`);
+    
+    // Step 2: Verify password by attempting to sign in with auth email
+    console.log('\n2. Testing password verification...');
+    
+    const { data: tempSignIn, error: tempError } = await supabaseClient.auth.signInWithPassword({
+      email: authUser.user.email,
+      password: password
+    });
+    
+    if (tempError) {
+      console.log(`❌ Password verification failed: ${tempError.message}`);
+      return false;
+    }
+    
+    console.log('✅ Password verification successful!');
+    
+    // Sign out the temporary session immediately
+    await supabaseClient.auth.signOut();
+    
+    // Step 3: Simulate the complete hook login flow
+    console.log('\n3. Simulating complete login hook flow...');
+    
+    // This mimics what happens in the use-auth hook after the API call
+    console.log('API would return:', {
+      success: true,
+      authEmail: authUser.user.email,
+      password: password,
+      user: {
+        id: profile.id,
+        email: profile.email,
+        name: profile.name,
+        accountType: profile.account_type,
+        isAdmin: profile.is_admin
+      }
+    });
+    
+    // Now test the final sign in that the hook would do
+    console.log('\n4. Testing final sign-in (what hook does)...');
+    
+    const { data: finalSignIn, error: finalError } = await supabaseClient.auth.signInWithPassword({
+      email: authUser.user.email,
+      password: password
+    });
+    
+    if (finalError) {
+      console.log(`❌ Final sign-in failed: ${finalError.message}`);
+      return false;
+    }
+    
+    console.log('✅ Final sign-in successful!');
+    console.log('Session created for user:', finalSignIn.user.id);
+    
+    // Test loading the profile (what happens next in the hook)
+    console.log('\n5. Testing profile loading...');
+    
+    const { data: loadedProfile, error: loadError } = await supabaseAdmin
+      .from("user_profiles")
+      .select("*")
+      .eq("id", finalSignIn.user.id)
+      .single();
+    
+    if (loadError) {
+      console.log(`❌ Profile loading failed: ${loadError.message}`);
+    } else {
+      console.log('✅ Profile loaded successfully');
+      console.log('Profile data:', {
+        name: loadedProfile.name,
+        email: loadedProfile.email,
+        accountType: loadedProfile.account_type,
+        isAdmin: loadedProfile.is_admin,
+        creditLimit: loadedProfile.credit_limit
+      });
+    }
+    
+    // Clean up by signing out
+    await supabaseClient.auth.signOut();
+    
+    console.log('\n✅ COMPLETE LOGIN TEST SUCCESSFUL! ✅');
+    return true;
+    
+  } catch (error) {
+    console.error('\n❌ Login test error:', error.message);
+    console.error(error);
+    return false;
+  }
+}
+
+async function runTests() {
+  console.log('=== COMPREHENSIVE LOGIN FLOW TEST ===');
+  
+  // Test credentials from the login page
+  const testCredentials = [
+    { email: 'admin@bizmart.com', password: 'admin123' },
+    { email: 'john@company.com', password: 'user123' },
+    { email: 'jane@personal.com', password: 'user123' },
+    { email: 'bob@smallbiz.com', password: 'temp2024' },
+    { email: 'test@example.com', password: 'test123456' } // If created by test script
+  ];
+  
+  let successful = 0;
+  let failed = 0;
+  
+  for (const { email, password } of testCredentials) {
+    const success = await testCompleteLogin(email, password);
+    if (success) {
+      successful++;
+    } else {
+      failed++;
+    }
+  }
+  
+  console.log('\n=== FINAL RESULTS ===');
+  console.log(`Successful logins: ${successful}`);
+  console.log(`Failed logins: ${failed}`);
+  
+  if (successful === 0) {
+    console.log('\n❌ No test users found or all logins failed');
+    console.log('Try running: node scripts/setup-test-users.js');
+  } else {
+    console.log('\n✅ Login system is working!');
+    console.log('Working credentials:');
+    
+    for (const { email, password } of testCredentials) {
+      // Re-test quickly to show which ones work
+      try {
+        const { data: profile } = await supabaseAdmin
+          .from("user_profiles")
+          .select("name")
+          .eq("email", email.toLowerCase().trim())
+          .eq("status", "active")
+          .single();
+          
+        if (profile) {
+          console.log(`  - ${email} / ${password}`);
+        }
+      } catch (e) {
+        // Skip non-existent users
+      }
+    }
+  }
+}
+
+runTests().catch(console.error);

@@ -1,0 +1,138 @@
+#!/usr/bin/env node
+
+// Diagnostic script to check the database state and login flow
+// Run with: node scripts/diagnose-login.js
+
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config({ path: '.env.local' });
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseServiceKey || !supabaseAnonKey) {
+  console.error('Missing required environment variables');
+  process.exit(1);
+}
+
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+});
+
+const supabaseClient = createClient(supabaseUrl, supabaseAnonKey);
+
+async function diagnoseLogin() {
+  console.log('=== LOGIN DIAGNOSIS ===\n');
+  
+  try {
+    // Step 1: Check if we have any user profiles
+    console.log('1. Checking user profiles...');
+    const { data: profiles, error: profilesError } = await supabaseAdmin
+      .from('user_profiles')
+      .select('id, email, name, status')
+      .limit(10);
+      
+    if (profilesError) {
+      console.error('Error fetching profiles:', profilesError);
+      return;
+    }
+    
+    console.log(`Found ${profiles.length} user profiles:`);
+    profiles.forEach(profile => {
+      console.log(`  - ${profile.email} (${profile.name}) - Status: ${profile.status}`);
+    });
+    
+    if (profiles.length === 0) {
+      console.log('\n❌ No user profiles found. Need to create test users first.');
+      console.log('Run: node scripts/create-test-user.js');
+      return;
+    }
+    
+    // Step 2: Check auth users
+    console.log('\n2. Checking auth users...');
+    
+    for (const profile of profiles.slice(0, 3)) { // Check first 3
+      try {
+        const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.getUserById(profile.id);
+        
+        if (authError) {
+          console.log(`  ❌ No auth user for ${profile.email}: ${authError.message}`);
+        } else {
+          console.log(`  ✅ ${profile.email} -> Auth: ${authUser.user.email}`);
+        }
+      } catch (error) {
+        console.log(`  ❌ Error checking auth for ${profile.email}: ${error.message}`);
+      }
+    }
+    
+    // Step 3: Test the custom login flow with a real user
+    if (profiles.length > 0) {
+      const testProfile = profiles.find(p => p.status === 'active') || profiles[0];
+      console.log(`\n3. Testing login flow with: ${testProfile.email}`);
+      
+      // First check if this user has an auth account
+      try {
+        const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.getUserById(testProfile.id);
+        
+        if (authError) {
+          console.log('❌ No auth user found for this profile');
+          return;
+        }
+        
+        console.log(`Auth email: ${authUser.user.email}`);
+        
+        // Try to test login with a default password (this will likely fail unless it's a test user)
+        const testPassword = 'test123456'; // Common test password
+        
+        console.log(`Testing password verification...`);
+        
+        const { data: signInData, error: signInError } = await supabaseClient.auth.signInWithPassword({
+          email: authUser.user.email,
+          password: testPassword
+        });
+        
+        if (signInError) {
+          console.log(`❌ Password test failed: ${signInError.message}`);
+          console.log('This is expected if this is not a test user or password is different');
+        } else {
+          console.log('✅ Password verification successful!');
+          // Sign out immediately
+          await supabaseClient.auth.signOut();
+        }
+        
+      } catch (error) {
+        console.log(`Error testing login: ${error.message}`);
+      }
+    }
+    
+    // Step 4: Recommend next steps
+    console.log('\n4. Recommendations:');
+    
+    const activeProfiles = profiles.filter(p => p.status === 'active');
+    
+    if (activeProfiles.length === 0) {
+      console.log('❌ No active profiles found');
+      console.log('- Create test users with: node scripts/create-test-user.js');
+    } else {
+      console.log('✅ Active profiles found');
+      console.log('- Test login with known credentials');
+      console.log('- Check if you have the correct passwords for these users');
+      
+      if (activeProfiles.some(p => p.email === 'admin@bizmart.com')) {
+        console.log('- Admin user exists - try password: admin123');
+      }
+      
+      if (activeProfiles.some(p => p.email === 'test@example.com')) {
+        console.log('- Test user exists - try password: test123456');
+      }
+    }
+    
+  } catch (error) {
+    console.error('Diagnosis error:', error);
+  }
+}
+
+diagnoseLogin();
