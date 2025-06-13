@@ -32,8 +32,8 @@ export async function POST(request: NextRequest) {
     
     const emailToCheck = userData.email.toLowerCase().trim()
     
-    // STEP 1: Database-first email conflict resolution
-    console.log(`Comprehensive email cleanup for: ${emailToCheck}`);
+    // STEP 1: Fast email conflict check with parallel cleanup
+    console.log(`Starting optimized user creation for: ${emailToCheck}`);
     
     // Find and remove ALL profiles with this email (including any orphaned ones)
     const { data: allProfilesWithEmail, error: findError } = await supabaseAdmin
@@ -65,26 +65,18 @@ export async function POST(request: NextRequest) {
         }, { status: 400 });
       }
       
-      // All profiles are inactive/deleted - clean them up
-      console.log(`All profiles are inactive/deleted. Cleaning up ${allProfilesWithEmail.length} profile(s)...`);
+      // OPTIMIZED: Parallel cleanup instead of sequential
+      console.log(`Cleaning up ${allProfilesWithEmail.length} inactive profile(s) in parallel...`);
       
-      for (const profile of allProfilesWithEmail) {
-        console.log(`Removing profile: ${profile.id} (${profile.name})`);
-        
-        // Delete the profile
-        const { error: deleteError } = await supabaseAdmin
+      const cleanupPromises = allProfilesWithEmail.map(profile => 
+        supabaseAdmin
           .from("user_profiles")
           .delete()
-          .eq("id", profile.id);
-        
-        if (deleteError) {
-          console.error(`Failed to delete profile ${profile.id}:`, deleteError);
-        } else {
-          console.log(`Deleted profile ${profile.id}`);
-        }
-      }
+          .eq("id", profile.id)
+      );
       
-      console.log(`Email ${emailToCheck} is now completely free`);
+      await Promise.allSettled(cleanupPromises);
+      console.log(`Parallel cleanup completed for email ${emailToCheck}`);
     } else {
       console.log(`No existing profiles found with email ${emailToCheck}`);
     }
@@ -140,10 +132,10 @@ export async function POST(request: NextRequest) {
       }, { status: 500 })
     }
     
-    // STEP 4: Proceed to create profile with proper cleanup on failure
+    // STEP 4: OPTIMIZED - Remove unnecessary cleanup operations
     console.log(`Creating profile for auth user: ${authUserId}`);
     
-    // STEP 5: Create the user profile
+    // STEP 5: Create the user profile with upsert to handle any ID conflicts
     const profileData = {
       id: authUserId,
       name: userData.name.trim(),
@@ -161,54 +153,18 @@ export async function POST(request: NextRequest) {
       status: 'active'
     }
     
-    // First, ensure no profile exists with this auth ID (final cleanup)
-    console.log(`Final cleanup check for auth ID: ${authUserId}`);
-    
-    const { error: finalCleanupError } = await supabaseAdmin
-      .from("user_profiles")
-      .delete()
-      .eq("id", authUserId);
-    
-    if (finalCleanupError) {
-      console.log(`No existing profile to delete (expected): ${finalCleanupError.message}`);
-    } else {
-      console.log(`Final cleanup: Deleted existing profile for auth ID: ${authUserId}`);
-    }
-    
-    // Also check and clean by email one more time
-    const { error: emailCleanupError } = await supabaseAdmin
-      .from("user_profiles")
-      .delete()
-      .eq("email", emailToCheck);
-    
-    if (emailCleanupError) {
-      console.log(`No profile with email to delete (expected): ${emailCleanupError.message}`);
-    } else {
-      console.log(`Final cleanup: Deleted profile(s) with email: ${emailToCheck}`);
-    }
-    
-    // Now create the new profile
+    // Use upsert to handle potential ID conflicts (this will insert or update)
     const { error: profileError } = await supabaseAdmin
       .from("user_profiles")
-      .insert(profileData);
+      .upsert(profileData, { onConflict: 'id' });
 
     if (profileError) {
       console.error("Profile creation failed:", profileError);
       
-      // Clean up auth user on failure
-      try {
-        console.log("Attempting to clean up auth user due to profile creation failure");
-        const { error: cleanupError } = await supabaseAdmin.auth.admin.deleteUser(authUserId);
-        
-        if (cleanupError) {
-          console.error("Auth user cleanup failed:", cleanupError);
-        } else {
-          console.log("Auth user cleaned up successfully");
-        }
-      } catch (cleanupException) {
-        console.error("Auth user cleanup exception:", cleanupException);
-        // Continue even if cleanup fails
-      }
+      // Clean up auth user on failure (non-blocking for speed)
+      supabaseAdmin.auth.admin.deleteUser(authUserId).catch(cleanupError => {
+        console.error("Auth user cleanup failed:", cleanupError);
+      });
       
       return NextResponse.json({ 
         success: false, 

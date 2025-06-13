@@ -168,13 +168,7 @@ export function ProductManagement() {
         return { ...prev, image_url: instantPreview }
       })
       
-      // Step 3: Show immediate success for better UX
-      toast({
-        title: '⚡ Image Processing',
-        description: 'Image loaded instantly! Optimizing in background...',
-      })
-      
-      // Step 4: Background optimization and upload
+      // Step 3: Background optimization and upload (removed success toaster)
       setTimeout(async () => {
         try {
           // Ensure storage is ready
@@ -199,10 +193,7 @@ export function ProductManagement() {
             return { ...prev, image_url: storageUrl }
           })
           
-          toast({
-            title: '🚀 Upload Complete',
-            description: 'Image optimized and uploaded successfully!',
-          })
+          // Removed the rocket toaster notification here
           
         } catch (uploadError) {
           console.error('Background upload failed:', uploadError)

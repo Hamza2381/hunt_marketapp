@@ -113,10 +113,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Memoize the auth context value to prevent unnecessary re-renders
   const memoizedAuth = useMemo(() => auth, [auth.user, auth.isLoading, auth.isAuthenticated]);
 
-  // Smart loading logic - never show loading screen for admin pages
-  const shouldShowLoading = auth.isLoading && !isTabReturn && !SessionManager.hasValidSession() && !isAdminPage
+  // Enhanced loading logic - prevent infinite loading states
+  const shouldShowLoading = useMemo(() => {
+    // Never show loading for admin pages
+    if (isAdminPage) return false
+    
+    // Don't show loading if we have valid session data
+    if (SessionManager.hasValidSession()) return false
+    
+    // Don't show loading if this is a tab return
+    if (isTabReturn) return false
+    
+    // Only show loading if auth is actually loading and we don't have a user
+    return auth.isLoading && !auth.user
+  }, [auth.isLoading, auth.user, isAdminPage, isTabReturn])
 
-  // Show loading spinner only when necessary
+  // Show loading spinner only when necessary and not stuck
   if (shouldShowLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white">

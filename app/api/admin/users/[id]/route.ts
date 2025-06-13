@@ -23,39 +23,42 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
     console.log("Supabase URL:", supabaseUrl ? "✓ Set" : "✗ Missing");
     console.log("Service Role Key:", supabaseServiceKey ? "✓ Set" : "✗ Missing");
     
-    // Step 1: Get user profile
-    const { data: userProfile, error: fetchError } = await supabaseAdmin
-      .from("user_profiles")
-      .select("email, name")
-      .eq("id", userId)
-      .single();
+    // Step 1: Fetch user profile and orders in parallel for speed
+    const [userProfileResponse, ordersResponse] = await Promise.all([
+      supabaseAdmin
+        .from("user_profiles")
+        .select("email, name")
+        .eq("id", userId)
+        .single(),
+      supabaseAdmin
+        .from("orders")
+        .select("id, total_amount, status")
+        .eq("user_id", userId)
+    ]);
     
-    if (fetchError) {
-      console.error("Error fetching user profile:", fetchError);
+    if (userProfileResponse.error) {
+      console.error("Error fetching user profile:", userProfileResponse.error);
       return NextResponse.json({ 
         success: false, 
         error: "User not found or unable to fetch user data" 
       }, { status: 404 });
     }
     
-    console.log("Found user:", userProfile.email);
-    
-    // Step 2: Check for existing orders and get their details
-    const { data: existingOrders, error: ordersError } = await supabaseAdmin
-      .from("orders")
-      .select("id, total_amount, status")
-      .eq("user_id", userId);
-    
-    if (ordersError) {
-      console.error("Error checking existing orders:", ordersError);
+    if (ordersResponse.error) {
+      console.error("Error checking existing orders:", ordersResponse.error);
       return NextResponse.json({ 
         success: false, 
         error: "Failed to check user's order history" 
       }, { status: 500 });
     }
     
-    const hasOrders = existingOrders && existingOrders.length > 0;
-    const orderCount = existingOrders ? existingOrders.length : 0;
+    const userProfile = userProfileResponse.data;
+    const existingOrders = ordersResponse.data || [];
+    
+    console.log("Found user:", userProfile.email);
+    
+    const hasOrders = existingOrders.length > 0;
+    const orderCount = existingOrders.length;
     
     // Calculate revenue impact from completed orders
     let completedOrdersRevenue = 0;
@@ -67,114 +70,133 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
     
     console.log(`User has ${orderCount} orders. Completed orders revenue: ${completedOrdersRevenue}`);
     
-    // Step 3: Always proceed with complete deletion
+    // Step 2: Always proceed with complete deletion
     console.log(hasOrders ? 
       `Deleting user with ${orderCount} orders and all related data` : 
       "No orders found. Proceeding with complete deletion.");
     
     try {
-      // Step 3a: Delete auth user first to free up email
-      console.log("Deleting auth user first to free email...");
+      // Step 3: Execute all deletion operations in parallel for maximum speed
+      const deletionPromises = [];
       
-      try {
-        const { data: authUser, error: getUserError } = await supabaseAdmin.auth.admin.getUserById(userId);
-        
-        if (!getUserError && authUser) {
+      // Auth user deletion (independent operation)
+      const authDeletionPromise = (async () => {
+        try {
+          console.log("Deleting auth user...");
           const { error: authError } = await supabaseAdmin.auth.admin.deleteUser(userId);
-          
           if (authError) {
             console.error("Error deleting auth user:", authError);
           } else {
-            console.log("Auth user deleted successfully - email is now available");
+            console.log("Auth user deleted successfully");
           }
+        } catch (authError) {
+          console.error("Auth deletion exception:", authError);
         }
-      } catch (authCheckError) {
-        console.error("Error with auth user operations:", authCheckError);
-      }
+      })();
       
-      // Step 3b: Delete all related data in the correct order
-      console.log("Deleting all related data...");
+      deletionPromises.push(authDeletionPromise);
       
+      // Database deletions (can run in parallel)
       if (hasOrders) {
-        // Delete order items first (foreign key constraint)
-        console.log("Deleting order items...");
-        const { error: orderItemsError } = await supabaseAdmin
-          .from("order_items")
-          .delete()
-          .in("order_id", existingOrders.map(order => order.id));
-        
-        if (orderItemsError) {
-          console.error("Error deleting order items:", orderItemsError);
-        } else {
-          console.log("Order items deleted successfully");
-        }
-        
-        // Delete orders
-        console.log("Deleting orders...");
-        const { error: ordersDeleteError } = await supabaseAdmin
-          .from("orders")
-          .delete()
-          .eq("user_id", userId);
-        
-        if (ordersDeleteError) {
-          console.error("Error deleting orders:", ordersDeleteError);
-        } else {
-          console.log(`${orderCount} orders deleted successfully`);
-          
-          // Create revenue adjustment for completed orders to maintain revenue totals
-          if (completedOrdersRevenue > 0) {
-            console.log(`Creating revenue adjustment for completed orders: ${completedOrdersRevenue}`);
+        // Delete order items and orders in sequence (foreign key constraint)
+        const orderDeletionPromise = (async () => {
+          try {
+            console.log("Deleting order items...");
+            const { error: orderItemsError } = await supabaseAdmin
+              .from("order_items")
+              .delete()
+              .in("order_id", existingOrders.map(order => order.id));
             
-            try {
-              // Insert the revenue adjustment (table should be created manually in database)
-              const completedOrderIds = existingOrders
-                .filter(o => o.status === 'delivered' || o.status === 'completed')
-                .map(o => o.id);
-              
-              const { error: adjustmentError } = await supabaseAdmin
-                .from('revenue_adjustments')
-                .insert({
-                  adjustment_type: 'add',
-                  amount: completedOrdersRevenue,
-                  reason: `Revenue adjustment for completed orders from deleted user: ${userProfile.name || userProfile.email}`,
-                  related_user_id: userId,
-                  related_order_ids: completedOrderIds
-                });
-              
-              if (adjustmentError) {
-                console.log('Revenue adjustment table may not exist yet, skipping adjustment:', adjustmentError.message);
-              } else {
-                console.log('Revenue adjustment created successfully');
-              }
-            } catch (adjustmentError) {
-              console.log('Revenue adjustment failed, continuing with deletion:', adjustmentError.message);
+            if (orderItemsError) {
+              console.error("Error deleting order items:", orderItemsError);
+            } else {
+              console.log("Order items deleted successfully");
             }
+            
+            console.log("Deleting orders...");
+            const { error: ordersDeleteError } = await supabaseAdmin
+              .from("orders")
+              .delete()
+              .eq("user_id", userId);
+            
+            if (ordersDeleteError) {
+              console.error("Error deleting orders:", ordersDeleteError);
+            } else {
+              console.log(`${orderCount} orders deleted successfully`);
+            }
+          } catch (error) {
+            console.error("Error in order deletion:", error);
           }
-        }
+        })();
+        
+        deletionPromises.push(orderDeletionPromise);
       }
       
-      // Delete other related data
-      const deleteOperations = [
+      // Other related data deletions (can run in parallel)
+      const chatDeletionPromise = Promise.allSettled([
         supabaseAdmin.from("chat_messages").delete().eq("sender_id", userId),
         supabaseAdmin.from("chat_conversations").delete().eq("user_id", userId)
-      ];
+      ]);
       
-      console.log("Executing other deletion operations...");
-      await Promise.allSettled(deleteOperations);
+      deletionPromises.push(chatDeletionPromise);
       
-      // Finally, delete user profile
-      console.log("Deleting user profile...");
-      const { error: profileDeleteError } = await supabaseAdmin
-        .from("user_profiles")
-        .delete()
-        .eq("id", userId);
+      // User profile deletion (can run in parallel with others)
+      const profileDeletionPromise = (async () => {
+        try {
+          console.log("Deleting user profile...");
+          const { error: profileDeleteError } = await supabaseAdmin
+            .from("user_profiles")
+            .delete()
+            .eq("id", userId);
+          
+          if (profileDeleteError) {
+            console.error("Profile deletion failed:", profileDeleteError);
+            throw new Error("Failed to delete user profile");
+          }
+          
+          console.log("User profile deleted successfully");
+        } catch (error) {
+          console.error("Error in profile deletion:", error);
+          throw error;
+        }
+      })();
       
-      if (profileDeleteError) {
-        console.error("Profile deletion failed:", profileDeleteError);
-        return NextResponse.json({ 
-          success: false, 
-          error: "Failed to delete user profile" 
-        }, { status: 500 });
+      deletionPromises.push(profileDeletionPromise);
+      
+      // Wait for all critical deletions to complete
+      console.log("Executing all deletion operations in parallel...");
+      await Promise.all(deletionPromises);
+      
+      // Step 4: Handle revenue adjustment in background (non-blocking)
+      if (completedOrdersRevenue > 0) {
+        // Don't wait for this - run in background
+        setImmediate(async () => {
+          try {
+            console.log(`Creating revenue adjustment for completed orders: ${completedOrdersRevenue}`);
+            
+            const completedOrderIds = existingOrders
+              .filter(o => o.status === 'delivered' || o.status === 'completed')
+              .map(o => o.id);
+            
+            const { error: adjustmentError } = await supabaseAdmin
+              .from('revenue_adjustments')
+              .insert({
+                adjustment_type: 'add',
+                amount: completedOrdersRevenue,
+                reason: `Revenue adjustment for completed orders from deleted user: ${userProfile.name || userProfile.email}`,
+                related_user_id: userId,
+                related_order_ids: completedOrderIds
+              });
+            
+            if (adjustmentError) {
+              console.log('Revenue adjustment table may not exist yet, skipping adjustment:', adjustmentError.message);
+            } else {
+              console.log('Revenue adjustment created successfully');
+            }
+          } catch (adjustmentError) {
+            console.log('Revenue adjustment failed, continuing:', adjustmentError.message);
+          }
+        });
       }
       
       console.log(`User ${userProfile.email} ${hasOrders ? `and ${orderCount} orders` : ''} deleted completely`);

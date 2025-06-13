@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -25,6 +25,25 @@ export default function LoginPage() {
   const { toast } = useToast()
   const router = useRouter()
 
+  // Clear any stuck auth states when login page loads
+  useEffect(() => {
+    // Clear any stuck loading states or auth conflicts
+    if (typeof window !== 'undefined') {
+      // Only clear if we're definitely on login page and not authenticated
+      const currentPath = window.location.pathname
+      if (currentPath.includes('/login')) {
+        console.log('Login page loaded - clearing any stuck auth states')
+        
+        // Clear session storage items that might cause conflicts
+        sessionStorage.removeItem('app_session_state')
+        sessionStorage.removeItem('app_last_activity')
+        sessionStorage.removeItem('app_tab_switch')
+        
+        // But don't clear localStorage completely as it might have other data
+      }
+    }
+  }, [])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
@@ -41,7 +60,8 @@ export default function LoginPage() {
 
         // Small delay to allow user profile to load, then redirect based on user type
         setTimeout(() => {
-          router.push("/")
+          // Use replace to avoid back button issues
+          router.replace("/")
         }, 100)
       } else {
         setError(result.error || "Login failed")

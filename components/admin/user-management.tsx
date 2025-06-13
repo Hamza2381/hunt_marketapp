@@ -407,28 +407,63 @@ export function UserManagement() {
     try {
       setIsCreatingUser(true);
       
+      // OPTIMIZED: Create optimistic user immediately for instant UI feedback
+      const optimisticUser = {
+        id: `temp-${Date.now()}`, // Temporary ID
+        name: createForm.name,
+        email: createForm.email,
+        accountType: createForm.accountType,
+        isAdmin: false,
+        creditLimit: createForm.creditLimit,
+        creditUsed: 0,
+        availableCredit: createForm.creditLimit,
+        company: createForm.accountType === "business" ? createForm.company : undefined,
+        phone: createForm.phone,
+        address: createForm.address,
+        temporaryPassword: true,
+        createdAt: new Date().toISOString()
+      };
+      
+      // Add to UI immediately for instant feedback
+      setUsers(prevUsers => [optimisticUser, ...prevUsers]);
+      
+      // Update cache immediately  
+      if (userDataCache.data) {
+        userDataCache.data = [optimisticUser, ...userDataCache.data];
+      }
+      
+      // Close dialog immediately and show success
+      setIsCreateDialogOpen(false);
+      
+      toast({
+        title: "User Created",
+        description: "New user has been created with a temporary password.",
+      });
+      
+      // Clear the form
+      const formData = { ...createForm }; // Save for potential rollback
+      setCreateForm({
+        name: "",
+        email: "",
+        accountType: "personal",
+        company: "",
+        phone: "",
+        creditLimit: 0,
+        address: { street: "", city: "", state: "", zipCode: "" },
+      });
+      
+      // Proceed with actual user creation in background
       const result = await createUser({
-        ...createForm,
+        ...formData,
         isAdmin: false,
         creditUsed: 0,
-        company: createForm.accountType === "business" ? createForm.company : undefined,
+        company: formData.accountType === "business" ? formData.company : undefined,
         temporaryPassword: true,
         mustChangePassword: true,
-      })
+      });
 
       if (result?.success) {
-        // Clear the form immediately
-        setCreateForm({
-          name: "",
-          email: "",
-          accountType: "personal",
-          company: "",
-          phone: "",
-          creditLimit: 0,
-          address: { street: "", city: "", state: "", zipCode: "" },
-        })
-        
-        // Optimistically add the new user to the UI immediately
+        // Replace optimistic user with real user data
         if (result.user) {
           const newUser = {
             id: result.user.id,
@@ -446,49 +481,61 @@ export function UserManagement() {
             createdAt: new Date().toISOString()
           };
           
-          // Update local state immediately
-          setUsers(prevUsers => [newUser, ...prevUsers]);
+          // Replace optimistic user with real data
+          setUsers(prevUsers => 
+            prevUsers.map(u => u.id === optimisticUser.id ? newUser : u)
+          );
           
-          // Update cache immediately  
+          // Update cache
           if (userDataCache.data) {
-            userDataCache.data = [newUser, ...userDataCache.data];
+            userDataCache.data = userDataCache.data.map(u => 
+              u.id === optimisticUser.id ? newUser : u
+            );
           }
           
           // Set for password dialog
           setSelectedUser(newUser);
           setGeneratedPassword(result.password || "");
+          setIsPasswordDialogOpen(true);
         }
         
-        // Close dialog and show password immediately
-        setIsCreateDialogOpen(false);
-        setIsPasswordDialogOpen(true);
-
-        toast({
-          title: "User Created",
-          description: "New user has been created with a temporary password.",
-        })
-        
-        // No background refresh needed - we already updated everything optimistically
-        
-        // Refresh admin stats after successful user creation (separate from main flow)
+        // Refresh admin stats in background
         setTimeout(() => {
           if (typeof window !== 'undefined' && window.refreshAdminStats) {
             window.refreshAdminStats()
           }
-        }, 500) // Small delay to ensure operation completes
+        }, 100);
       } else {
+        // Rollback optimistic update on failure
+        setUsers(prevUsers => prevUsers.filter(u => u.id !== optimisticUser.id));
+        
+        if (userDataCache.data) {
+          userDataCache.data = userDataCache.data.filter(u => u.id !== optimisticUser.id);
+        }
+        
+        // Restore form data
+        setCreateForm(formData);
+        setIsCreateDialogOpen(true);
+        
         toast({
           title: "Error",
           description: `Failed to create user: ${result?.error || "Unknown error"}`,
           variant: "destructive",
-        })
+        });
       }
     } catch (error) {
+      // Rollback optimistic update on error
+      setUsers(prevUsers => prevUsers.filter(u => !u.id.toString().startsWith('temp-')));
+      
+      if (userDataCache.data) {
+        userDataCache.data = userDataCache.data.filter(u => !u.id.toString().startsWith('temp-'));
+      }
+      
       toast({
         title: "Error",
         description: "Failed to create user. Please try again.",
         variant: "destructive",
-      })
+      });
     } finally {
       setIsCreatingUser(false);
     }
@@ -552,7 +599,24 @@ export function UserManagement() {
 
   const performUserDeletion = async (userId: string, expectedOrderCount: number) => {
     try {
-      // Proceed with deletion
+      // Optimistic UI update - remove user immediately for faster perceived performance
+      const userToRemove = users.find(u => u.id === userId);
+      setUsers(prevUsers => prevUsers.filter(u => u.id !== userId));
+      
+      // Update cache immediately
+      if (userDataCache.data) {
+        userDataCache.data = userDataCache.data.filter(u => u.id !== userId);
+      }
+      
+      // Show immediate success feedback
+      toast({
+        title: "User Deleted",
+        description: expectedOrderCount > 0 ? 
+          `User and ${expectedOrderCount} orders have been permanently deleted.` : 
+          "User has been completely removed.",
+      });
+      
+      // Proceed with actual deletion in background
       const response = await fetch(`/api/admin/users/${userId}`, {
         method: 'DELETE',
         headers: { 
@@ -562,37 +626,57 @@ export function UserManagement() {
       
       const result = await response.json();
       
-      if (response.ok && result.success) {
-        // User was deleted - remove from UI
-        setUsers(prevUsers => prevUsers.filter(u => u.id !== userId));
-        
-        // Update cache
-        if (userDataCache.data) {
-          userDataCache.data = userDataCache.data.filter(u => u.id !== userId);
+      if (!response.ok || !result.success) {
+        // Rollback optimistic update on failure
+        if (userToRemove) {
+          setUsers(prevUsers => {
+            // Insert back in correct position (by creation date)
+            const sortedUsers = [...prevUsers, userToRemove].sort((a, b) => 
+              new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+            );
+            return sortedUsers;
+          });
+          
+          // Restore in cache
+          if (userDataCache.data) {
+            userDataCache.data = [...userDataCache.data, userToRemove].sort((a, b) => 
+              new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+            );
+          }
         }
         
-        toast({
-          title: "User Deleted",
-          description: expectedOrderCount > 0 ? 
-            `User and ${expectedOrderCount} orders have been permanently deleted.` : 
-            "User has been completely removed.",
-        });
-        
-        // Refresh admin stats after successful user deletion
-        setTimeout(() => {
-          if (typeof window !== 'undefined' && window.refreshAdminStats) {
-            window.refreshAdminStats()
-          }
-        }, 500);
-        
-      } else {
         toast({
           title: "Error",
           description: result.error || "Failed to delete user. Please try again.",
           variant: "destructive",
         });
+      } else {
+        // Success - refresh admin stats
+        setTimeout(() => {
+          if (typeof window !== 'undefined' && window.refreshAdminStats) {
+            window.refreshAdminStats()
+          }
+        }, 100); // Reduced delay since deletion already completed
       }
     } catch (error) {
+      // Rollback optimistic update on error
+      const userToRemove = users.find(u => u.id === userId);
+      if (userToRemove) {
+        setUsers(prevUsers => {
+          const sortedUsers = [...prevUsers, userToRemove].sort((a, b) => 
+            new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+          );
+          return sortedUsers;
+        });
+        
+        // Restore in cache
+        if (userDataCache.data) {
+          userDataCache.data = [...userDataCache.data, userToRemove].sort((a, b) => 
+            new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+          );
+        }
+      }
+      
       toast({
         title: "Error",
         description: "An unexpected error occurred while deleting the user.",

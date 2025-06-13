@@ -16,58 +16,81 @@ export function AdminPageWrapper({ children }: AdminPageWrapperProps) {
   const [authTimeout, setAuthTimeout] = useState(false)
   const [loadingMessage, setLoadingMessage] = useState('Loading...')
 
-  // Timeout protection for infinite loading
+  // Enhanced timeout protection for infinite loading
   useEffect(() => {
+    // Shorter timeout for admin pages since they should load quickly
     const timeoutId = setTimeout(() => {
       if (isLoading) {
-        console.warn('Auth loading timeout reached')
+        console.warn('Admin auth loading timeout reached - forcing timeout state')
         setAuthTimeout(true)
       }
-    }, 15000) // Increased to 15 seconds
+    }, 8000) // Reduced to 8 seconds for admin pages
 
     // Update loading message over time
     const messageTimeout1 = setTimeout(() => {
       if (isLoading) {
-        setLoadingMessage('Authenticating...')
+        setLoadingMessage('Verifying admin access...')
       }
-    }, 2000)
+    }, 1500)
 
     const messageTimeout2 = setTimeout(() => {
       if (isLoading) {
-        setLoadingMessage('Loading profile...')
+        setLoadingMessage('Loading admin profile...')
       }
-    }, 5000)
+    }, 3000)
 
     const messageTimeout3 = setTimeout(() => {
       if (isLoading) {
         setLoadingMessage('Almost ready...')
       }
-    }, 10000)
+    }, 5000)
+
+    const messageTimeout4 = setTimeout(() => {
+      if (isLoading) {
+        setLoadingMessage('Taking longer than expected...')
+      }
+    }, 7000)
 
     return () => {
       clearTimeout(timeoutId)
       clearTimeout(messageTimeout1)
       clearTimeout(messageTimeout2)
       clearTimeout(messageTimeout3)
+      clearTimeout(messageTimeout4)
     }
   }, [isLoading])
 
-  // Handle auth redirects
+  // Enhanced auth redirects with better error handling
   useEffect(() => {
-    if (!isLoading && !authTimeout) {
-      if (!isAuthenticated) {
-        console.log('Not authenticated, redirecting to login')
-        router.push('/login')
-        return
-      }
-      
-      if (!user?.isAdmin) {
-        console.log('Not admin, redirecting to home')
-        router.push('/')
-        return
-      }
+    // Don't redirect if still loading or timeout occurred
+    if (isLoading || authTimeout) {
+      return
     }
-  }, [isLoading, isAuthenticated, user?.isAdmin, router, authTimeout])
+    
+    // Handle unauthenticated users
+    if (!isAuthenticated) {
+      console.log('Admin page: User not authenticated, redirecting to login')
+      // Small delay to avoid conflicts
+      const timeoutId = setTimeout(() => {
+        router.replace('/login')
+      }, 100)
+      return () => clearTimeout(timeoutId)
+    }
+    
+    // Handle non-admin users
+    if (isAuthenticated && user && !user.isAdmin) {
+      console.log('Admin page: User is not admin, redirecting to home')
+      const timeoutId = setTimeout(() => {
+        router.replace('/')
+      }, 100)
+      return () => clearTimeout(timeoutId)
+    }
+    
+    // If we reach here, user is authenticated and admin - no redirect needed
+    if (isAuthenticated && user?.isAdmin) {
+      console.log('Admin page: User is authenticated admin, access granted')
+    }
+  }, [isLoading, isAuthenticated, user?.isAdmin, router, authTimeout, user])
 
   // Show timeout error
   if (authTimeout) {
@@ -75,17 +98,38 @@ export function AdminPageWrapper({ children }: AdminPageWrapperProps) {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center max-w-md">
           <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-          <h1 className="text-2xl font-bold text-red-600 mb-2">Loading Timeout</h1>
+          <h1 className="text-2xl font-bold text-red-600 mb-2">Admin Access Timeout</h1>
           <p className="text-gray-600 mb-4">
             The admin dashboard is taking longer than expected to load. 
-            This might be due to network issues or server load.
+            This usually happens when there's an authentication issue or network problem.
           </p>
           <div className="space-y-2">
-            <Button onClick={() => window.location.reload()} className="w-full">
-              Refresh Page
+            <Button 
+              onClick={() => {
+                // Clear all auth state and refresh
+                if (typeof window !== 'undefined') {
+                  localStorage.clear()
+                  sessionStorage.clear()
+                  window.location.href = '/admin'
+                }
+              }} 
+              className="w-full"
+            >
+              Clear Cache & Retry
             </Button>
-            <Button onClick={() => router.push('/login')} variant="outline" className="w-full">
-              Go to Login
+            <Button 
+              onClick={() => {
+                // Clear auth and go to login
+                if (typeof window !== 'undefined') {
+                  localStorage.clear()
+                  sessionStorage.clear()
+                  window.location.href = '/login'
+                }
+              }} 
+              variant="outline" 
+              className="w-full"
+            >
+              Login Again
             </Button>
           </div>
         </div>
@@ -106,17 +150,36 @@ export function AdminPageWrapper({ children }: AdminPageWrapperProps) {
     )
   }
   
-  // Show access denied for non-admin users
-  if (!isAuthenticated || !user?.isAdmin) {
+  // Show access denied for non-admin users (only after loading is complete)
+  if (!isLoading && !authTimeout && (!isAuthenticated || !user?.isAdmin)) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-          <h1 className="text-2xl font-bold text-red-600 mb-2">Access Denied</h1>
-          <p className="text-gray-600 mb-4">You do not have permission to view this page.</p>
-          <Button onClick={() => router.push('/')} variant="outline">
-            Go to Home
-          </Button>
+          <h1 className="text-2xl font-bold text-red-600 mb-2">Admin Access Required</h1>
+          <p className="text-gray-600 mb-4">
+            {!isAuthenticated 
+              ? "Please log in with an admin account to access this page." 
+              : "Your account does not have administrator privileges."}
+          </p>
+          <div className="space-y-2">
+            <Button 
+              onClick={() => {
+                // Clear auth state and redirect
+                if (typeof window !== 'undefined') {
+                  localStorage.clear()
+                  sessionStorage.clear()
+                  window.location.href = '/login'
+                }
+              }} 
+              className="w-full"
+            >
+              Login as Admin
+            </Button>
+            <Button onClick={() => router.push('/')} variant="outline" className="w-full">
+              Go to Home
+            </Button>
+          </div>
         </div>
       </div>
     )

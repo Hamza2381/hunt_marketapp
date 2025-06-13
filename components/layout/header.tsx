@@ -63,12 +63,17 @@ export function Header() {
   }, [])
 
   const handleLogout = async () => {
-    await logout()
-    toast({
-      title: "Logged out",
-      description: "You have been successfully logged out.",
-    })
-    router.push("/login")
+    try {
+      await logout()
+      toast({
+        title: "Logged out",
+        description: "You have been successfully logged out.",
+      })
+      // Don't add router.push here - logout() already handles redirect
+    } catch (error) {
+      // Fallback redirect only if logout fails
+      router.push("/login")
+    }
   }
 
   const isAdmin = user?.isAdmin === true

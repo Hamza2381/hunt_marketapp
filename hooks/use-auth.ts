@@ -296,35 +296,39 @@ export function useAuth() {
     }
   }, []) // Empty dependency array to run only once
 
-  // Listen for auth changes with improved logout handling
+  // Enhanced auth state change handler with better logout and login handling
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth state changed:', event, 'Session exists:', !!session)
+      console.log('Auth state changed:', event, 'Session exists:', !!session, 'Current path:', window.location.pathname)
       
       if (event === 'SIGNED_IN' && session?.user) {
-        // For admin pages, always reload profile from database
-        if (window.location.pathname.startsWith('/admin')) {
-          console.log('Admin page - reloading profile from database')
-          await loadUserProfile(session.user)
-          setIsLoading(false)
-          return
-        }
+        console.log('User signed in, loading profile...')
         
-        // Regular flow for non-admin pages
+        // Clear any existing loading states that might be stuck
         setIsLoading(true)
-        await loadUserProfile(session.user)
-        setIsLoading(false)
+        
+        try {
+          // Always reload profile from database for any sign-in
+          await loadUserProfile(session.user)
+          console.log('Profile loaded successfully after sign in')
+        } catch (error) {
+          console.error('Failed to load profile after sign in:', error)
+          setUser(null)
+        } finally {
+          setIsLoading(false)
+        }
       } else if (event === 'SIGNED_OUT' || !session) {
-        console.log('User signed out or session expired')
+        console.log('User signed out or session expired, clearing all state')
         
-        // Clear all state regardless of page type
+        // Immediate state cleanup
         setUser(null)
+        setIsLoading(false) // Important: don't keep loading state
         SessionManager.clearAppState()
-        setIsLoading(false)
         
-        // Only redirect to login if not already on login/signup pages or other public pages
+        // Handle redirects based on current page
         if (typeof window !== 'undefined') {
           const currentPath = window.location.pathname
+          
           const isAlreadyOnAuthPage = currentPath.includes('/login') || 
                                      currentPath.includes('/signup') || 
                                      currentPath.includes('/forgot-password') || 
@@ -336,19 +340,31 @@ export function useAuth() {
                               currentPath.includes('/deals') || 
                               currentPath.includes('/contact')
           
-          // Only redirect if user is on a protected page
-          if (!isAlreadyOnAuthPage && !isPublicPage) {
-            console.log('Redirecting to login page from protected route:', currentPath)
+          const isProtectedPage = currentPath.includes('/admin') || 
+                                currentPath.includes('/profile') || 
+                                currentPath.includes('/orders') || 
+                                currentPath.includes('/cart')
+          
+          // Redirect to login if on protected pages or admin pages
+          if (isProtectedPage || (!isAlreadyOnAuthPage && !isPublicPage)) {
+            console.log('Redirecting to login from protected/admin route:', currentPath)
+            // Small delay to ensure state is cleared
             setTimeout(() => {
-              window.location.href = '/login'
-            }, 100)
+              window.location.replace('/login')
+            }, 50)
           }
+        }
+      } else if (event === 'TOKEN_REFRESHED') {
+        console.log('Token refreshed, updating profile if needed')
+        // Don't reload profile unnecessarily on token refresh
+        if (session?.user && !user) {
+          await loadUserProfile(session.user)
         }
       }
     })
 
     return () => subscription.unsubscribe()
-  }, [loadUserProfile])
+  }, [loadUserProfile, user])
 
   // Tab visibility management (disabled for admin pages)
   useEffect(() => {
@@ -394,6 +410,11 @@ export function useAuth() {
 
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
+      console.log('Starting login process for:', email)
+      
+      // Clear any existing auth state before login
+      setUser(null)
+      SessionManager.clearAppState()
       setIsLoading(true)
       
       // Use our custom login API
@@ -406,48 +427,84 @@ export function useAuth() {
       const result = await response.json()
       
       if (!result.success) {
+        console.log('Login API failed:', result.error)
         return { success: false, error: result.error || 'Login failed' }
       }
       
+      console.log('Login API successful, signing in with Supabase...')
+      
       // Sign in with auth credentials
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: result.authEmail,
         password: result.password,
       })
 
       if (error) {
+        console.log('Supabase sign in failed:', error.message)
         return { success: false, error: error.message }
       }
-
-      return { success: true }
+      
+      if (data.session?.user) {
+        console.log('Login successful, loading user profile...')
+        // The auth state change handler will load the profile
+        return { success: true }
+      } else {
+        console.log('Login succeeded but no session/user data')
+        return { success: false, error: 'Login succeeded but session was not created' }
+      }
+      
     } catch (error) {
+      console.error('Login error:', error)
       return { success: false, error: "An unexpected error occurred" }
     } finally {
-      setIsLoading(false)
+      // Don't set loading to false here - let the auth state change handler do it
+      // setIsLoading(false) // Removed this line
     }
   }
 
   const logout = async () => {
     try {
-      console.log('Starting logout process...')
+      console.log('Starting enhanced logout process...')
       
-      // Set loading state to prevent UI interactions during logout
-      setIsLoading(true)
-      
-      // Step 1: Clear local state immediately for immediate UI feedback
+      // Step 1: Immediately clear ALL auth state to prevent conflicts
       setUser(null)
+      setIsLoading(false) // Don't set loading during logout to avoid infinite loading
       
-      // Step 2: Clear all session data regardless of page type
+      // Step 2: Complete session cleanup - clear everything
       SessionManager.clearAppState()
       
-      // Step 3: Sign out from Supabase with timeout protection
-      const signOutPromise = supabase.auth.signOut({
-        scope: 'global' // Sign out from all sessions
-      })
+      // Step 3: Clear ALL browser storage that could interfere
+      if (typeof window !== 'undefined') {
+        try {
+          // Clear all storage types
+          localStorage.clear()
+          sessionStorage.clear()
+          
+          // Clear specific auth-related items that might remain
+          const authKeysToRemove = [
+            'supabase-auth-token',
+            'sb-localhost-auth-token',
+            'supabase.auth.token',
+            'app_session_state',
+            'app_last_activity',
+            'app_tab_switch'
+          ]
+          
+          authKeysToRemove.forEach(key => {
+            localStorage.removeItem(key)
+            sessionStorage.removeItem(key)
+          })
+          
+          console.log('All browser storage cleared')
+        } catch (storageError) {
+          console.warn('Failed to clear storage:', storageError)
+        }
+      }
       
-      // Add 5-second timeout to prevent hanging
+      // Step 4: Sign out from Supabase (but don't wait too long)
+      const signOutPromise = supabase.auth.signOut({ scope: 'global' })
       const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Logout timeout')), 5000)
+        setTimeout(() => reject(new Error('Logout timeout')), 3000) // Reduced timeout
       )
       
       try {
@@ -455,46 +512,43 @@ export function useAuth() {
         console.log('Supabase signOut completed successfully')
       } catch (signOutError) {
         console.warn('Supabase signOut failed or timed out:', signOutError)
-        // Continue with local cleanup even if remote signout fails
+        // Continue with redirect - don't let this block the logout
       }
       
-      // Step 4: Force clear any remaining auth tokens
+      // Step 5: Force clear any cached session data
       try {
-        await supabase.auth.refreshSession()
+        // Clear the internal Supabase session cache
+        await supabase.auth.getSession() // This refreshes the internal state
       } catch {
-        // Ignore refresh errors - we're logging out anyway
+        // Ignore errors - we're logging out anyway
       }
       
-      // Step 5: Clear browser storage manually as backup
+      console.log('Enhanced logout process completed')
+      
+      // Step 6: Immediate redirect with page refresh to ensure clean state
       if (typeof window !== 'undefined') {
-        try {
-          localStorage.removeItem('supabase-auth-token')
-          sessionStorage.clear()
-        } catch (storageError) {
-          console.warn('Failed to clear storage:', storageError)
-        }
+        console.log('Redirecting to login with page refresh...')
+        // Use location.replace to avoid back button issues
+        window.location.replace('/login')
       }
-      
-      console.log('Logout process completed')
-      
-      // Step 6: Force redirect to login page after a short delay
-      setTimeout(() => {
-        if (typeof window !== 'undefined') {
-          window.location.href = '/login'
-        }
-      }, 100)
       
     } catch (error) {
       console.error('Logout error:', error)
-      // Even if logout fails, clear local state and redirect
+      
+      // Emergency cleanup - even if everything fails, force clean state
       setUser(null)
+      setIsLoading(false)
       SessionManager.clearAppState()
       
       if (typeof window !== 'undefined') {
-        window.location.href = '/login'
+        try {
+          localStorage.clear()
+          sessionStorage.clear()
+        } catch {}
+        
+        // Force redirect even on error
+        window.location.replace('/login')
       }
-    } finally {
-      setIsLoading(false)
     }
   }
 
