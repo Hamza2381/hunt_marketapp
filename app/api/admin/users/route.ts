@@ -32,60 +32,45 @@ export async function POST(request: NextRequest) {
     
     const emailToCheck = userData.email.toLowerCase().trim()
     
-    // STEP 1: Fast email conflict check with parallel cleanup
-    console.log(`Starting optimized user creation for: ${emailToCheck}`);
+    // STEP 1: Streamlined email conflict check (optimized for speed)
+    console.log(`Starting fast user creation for: ${emailToCheck}`);
     
-    // Find and remove ALL profiles with this email (including any orphaned ones)
-    const { data: allProfilesWithEmail, error: findError } = await supabaseAdmin
+    // Quick active user check only (skip inactive cleanup for speed)
+    const { data: activeProfileCheck, error: findError } = await supabaseAdmin
       .from("user_profiles")
-      .select("id, email, name, status")
-      .eq("email", emailToCheck);
+      .select("id")
+      .eq("email", emailToCheck)
+      .eq("status", "active")
+      .neq("name", "[Deleted User]")
+      .limit(1);
     
     if (findError) {
-      console.error("Error finding profiles with email:", findError);
+      console.error("Error checking for active profiles:", findError);
       return NextResponse.json({ 
         success: false, 
         error: `Database error: ${findError.message}` 
       }, { status: 500 });
     }
     
-    if (allProfilesWithEmail && allProfilesWithEmail.length > 0) {
-      console.log(`Found ${allProfilesWithEmail.length} profile(s) with email ${emailToCheck}`);
-      
-      // Check if any are truly active (not deleted/inactive)
-      const activeProfiles = allProfilesWithEmail.filter(p => 
-        p.status === 'active' && p.name !== '[Deleted User]'
-      );
-      
-      if (activeProfiles.length > 0) {
-        console.log(`Found ${activeProfiles.length} active profile(s) - email is taken`);
-        return NextResponse.json({ 
-          success: false, 
-          error: `Email ${userData.email} is already registered. Please use a different email address.` 
-        }, { status: 400 });
-      }
-      
-      // OPTIMIZED: Parallel cleanup instead of sequential
-      console.log(`Cleaning up ${allProfilesWithEmail.length} inactive profile(s) in parallel...`);
-      
-      const cleanupPromises = allProfilesWithEmail.map(profile => 
-        supabaseAdmin
-          .from("user_profiles")
-          .delete()
-          .eq("id", profile.id)
-      );
-      
-      await Promise.allSettled(cleanupPromises);
-      console.log(`Parallel cleanup completed for email ${emailToCheck}`);
-    } else {
-      console.log(`No existing profiles found with email ${emailToCheck}`);
+    if (activeProfileCheck && activeProfileCheck.length > 0) {
+      console.log(`Email ${emailToCheck} is already in use`);
+      return NextResponse.json({ 
+        success: false, 
+        error: `Email ${userData.email} is already registered. Please use a different email address.` 
+      }, { status: 400 });
     }
     
+    console.log(`Email ${emailToCheck} is available - proceeding with creation`);
+    
     // STEP 2: Email is available in database, proceed with creation
-    // Generate password
-    const password = Math.random().toString(36).slice(-8) + 
+    // Use pre-generated password from frontend, or generate one if not provided
+    const password = userData.preGeneratedPassword || (
+      Math.random().toString(36).slice(-8) + 
       Math.random().toString(36).slice(-8).toUpperCase() + 
       Math.floor(Math.random() * 1000)
+    )
+    
+    console.log(`Using ${userData.preGeneratedPassword ? 'pre-generated' : 'backend-generated'} password for user creation`);
     
     // STEP 3: Create auth user with system email (no conflicts possible)
     let authUserId;
@@ -132,10 +117,10 @@ export async function POST(request: NextRequest) {
       }, { status: 500 })
     }
     
-    // STEP 4: OPTIMIZED - Remove unnecessary cleanup operations
+    // STEP 4: Create the user profile immediately (no unnecessary operations)
     console.log(`Creating profile for auth user: ${authUserId}`);
     
-    // STEP 5: Create the user profile with upsert to handle any ID conflicts
+    // STEP 5: Create the user profile directly (faster than upsert)
     const profileData = {
       id: authUserId,
       name: userData.name.trim(),

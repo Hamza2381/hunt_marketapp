@@ -366,10 +366,10 @@ export function useAuth() {
     return () => subscription.unsubscribe()
   }, [loadUserProfile, user])
 
-  // Tab visibility management (disabled for admin pages)
+  // Tab visibility management (only disabled for admin pages for session management, but allows auth flow)
   useEffect(() => {
     const handleVisibilityChange = () => {
-      // Skip all session management for admin pages
+      // For admin pages, skip session management but allow normal auth flow
       if (window.location.pathname.startsWith('/admin')) {
         return
       }
@@ -393,6 +393,7 @@ export function useAuth() {
     }
 
     const handleFocus = () => {
+      // For admin pages, skip session management but allow normal auth flow
       if (window.location.pathname.startsWith('/admin')) {
         return
       }
@@ -473,35 +474,55 @@ export function useAuth() {
       // Step 2: Complete session cleanup - clear everything
       SessionManager.clearAppState()
       
-      // Step 3: Clear ALL browser storage that could interfere
+      // Step 3: Clear ALL browser storage that could interfere with auth (but preserve cart)
       if (typeof window !== 'undefined') {
         try {
-          // Clear all storage types
-          localStorage.clear()
-          sessionStorage.clear()
-          
-          // Clear specific auth-related items that might remain
+          // SELECTIVE CLEARING: Only clear auth-related items, preserve cart data
           const authKeysToRemove = [
             'supabase-auth-token',
             'sb-localhost-auth-token',
             'supabase.auth.token',
             'app_session_state',
             'app_last_activity',
-            'app_tab_switch'
+            'app_tab_switch',
+            'user_is_admin' // Clear admin status flag
           ]
           
+          // Clear specific auth keys from both localStorage and sessionStorage
           authKeysToRemove.forEach(key => {
             localStorage.removeItem(key)
             sessionStorage.removeItem(key)
           })
           
-          console.log('All browser storage cleared')
+          // Clear sessionStorage completely (it shouldn't have cart data)
+          sessionStorage.clear()
+          
+          // Clear any remaining Supabase auth keys with dynamic patterns
+          const allLocalStorageKeys = Object.keys(localStorage)
+          allLocalStorageKeys.forEach(key => {
+            // Only remove auth-related keys, preserve cart and other app data
+            if (key.includes('supabase') && (key.includes('auth') || key.includes('token'))) {
+              localStorage.removeItem(key)
+            }
+          })
+          
+          console.log('Auth-related storage cleared, cart data preserved')
         } catch (storageError) {
           console.warn('Failed to clear storage:', storageError)
         }
       }
       
-      // Step 4: Sign out from Supabase (but don't wait too long)
+      // Step 4: IMMEDIATE redirect for admin pages (before Supabase logout)
+      if (typeof window !== 'undefined') {
+        const currentPath = window.location.pathname
+        if (currentPath.startsWith('/admin')) {
+          console.log('Admin page logout detected - immediate redirect to login')
+          window.location.replace('/login')
+          return // Exit early for admin pages
+        }
+      }
+      
+      // Step 5: Sign out from Supabase (but don't wait too long)
       const signOutPromise = supabase.auth.signOut({ scope: 'global' })
       const timeoutPromise = new Promise((_, reject) => 
         setTimeout(() => reject(new Error('Logout timeout')), 3000) // Reduced timeout
@@ -515,7 +536,7 @@ export function useAuth() {
         // Continue with redirect - don't let this block the logout
       }
       
-      // Step 5: Force clear any cached session data
+      // Step 6: Force clear any cached session data
       try {
         // Clear the internal Supabase session cache
         await supabase.auth.getSession() // This refreshes the internal state
@@ -525,7 +546,7 @@ export function useAuth() {
       
       console.log('Enhanced logout process completed')
       
-      // Step 6: Immediate redirect with page refresh to ensure clean state
+      // Step 7: Redirect for non-admin pages
       if (typeof window !== 'undefined') {
         console.log('Redirecting to login with page refresh...')
         // Use location.replace to avoid back button issues
@@ -542,7 +563,22 @@ export function useAuth() {
       
       if (typeof window !== 'undefined') {
         try {
-          localStorage.clear()
+          // Emergency selective clearing - preserve cart data even in error scenarios
+          const authKeysToRemove = [
+            'supabase-auth-token',
+            'sb-localhost-auth-token',
+            'supabase.auth.token',
+            'app_session_state',
+            'app_last_activity',
+            'app_tab_switch',
+            'user_is_admin'
+          ]
+          
+          authKeysToRemove.forEach(key => {
+            localStorage.removeItem(key)
+            sessionStorage.removeItem(key)
+          })
+          
           sessionStorage.clear()
         } catch {}
         

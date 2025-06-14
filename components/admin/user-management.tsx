@@ -73,13 +73,18 @@ export function UserManagement() {
         userDataCache.timestamp = Date.now()
         
         setUsers(usersData)
+      } else {
+        // If getAllUsers is not available, set empty array
+        setUsers([])
       }
     } catch (error) {
+      console.error('Error fetching users:', error)
       toast({
         title: 'Error',
         description: 'Failed to refresh user data.',
         variant: 'destructive',
       })
+      setUsers([]) // Set empty array on error
     } finally {
       setIsLoading(false)
       userDataCache.isLoading = false
@@ -87,8 +92,9 @@ export function UserManagement() {
   }, [getAllUsers, toast])
   
   useEffect(() => {
+    // Only run on mount
     refreshUsers()
-  }, [refreshUsers])
+  }, []) // Remove refreshUsers from dependencies to prevent cycles
   
   const [selectedUser, setSelectedUser] = useState<UserType | null>(null)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
@@ -102,6 +108,9 @@ export function UserManagement() {
   const [generatedPassword, setGeneratedPassword] = useState("")
   const [isCreatingUser, setIsCreatingUser] = useState(false)
   const [isDeletingUser, setIsDeletingUser] = useState<string | null>(null)
+  const [isSavingCredit, setIsSavingCredit] = useState(false)
+  const [isEditingUser, setIsEditingUser] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   const [editForm, setEditForm] = useState({
     name: "",
@@ -192,7 +201,8 @@ export function UserManagement() {
         setGeneratedPassword(tempPassword)
         setIsPasswordDialogOpen(true)
         
-        await refreshUsers(false);
+        // Refresh users data in background without affecting the password dialog
+        refreshUsers(false).catch(console.error);
 
         toast({
           title: "Password Reset",
@@ -225,7 +235,7 @@ export function UserManagement() {
     }
 
     try {
-      setIsLoading(true)
+      setIsEditingUser(true)
       
       // Prepare the update payload
       const updatePayload = {
@@ -233,64 +243,107 @@ export function UserManagement() {
         company: editForm.accountType === "business" ? editForm.company : null,
       }
       
+      // OPTIMISTIC UPDATE: Update UI immediately
+      const updatedUserData = {
+        ...selectedUser,
+        ...editForm,
+        company: editForm.accountType === "business" ? editForm.company : null,
+      };
+      
+      // Update the local state immediately
+      setUsers(prevUsers => 
+        prevUsers.map(user => {
+          if (user && user.id === selectedUser.id) {
+            return updatedUserData as UserType;
+          }
+          return user;
+        })
+      )
+      
+      // Update cache immediately
+      if (userDataCache.data) {
+        userDataCache.data = userDataCache.data.map(user => {
+          if (user && user.id === selectedUser.id) {
+            return updatedUserData as UserType;
+          }
+          return user;
+        });
+      }
+      
+      // Close dialog immediately
+      setIsEditDialogOpen(false)
+      
+      // Show success toast immediately
+      toast({
+        title: "User Updated",
+        description: "User information has been successfully updated.",
+      })
+      
+      // API call in background
       const result = await updateUserById(selectedUser.id, updatePayload)
       
       console.log('User update result:', result);
 
-      // Check if the update was successful - be more flexible with success detection
-      if (result && (result.success || result.data)) {
-        // Create updated user object
-        const updatedUserData = {
-          ...selectedUser,
-          ...editForm,
-          company: editForm.accountType === "business" ? editForm.company : null,
-        };
-        
-        // Update the local state immediately
+      // Check if the update was successful
+      if (!result || (!result.success && !result.data)) {
+        // API failed - rollback changes
         setUsers(prevUsers => 
-          prevUsers.map(user => 
-            user && user.id === selectedUser.id ? updatedUserData : user
-          )
+          prevUsers.map(user => {
+            if (user && user.id === selectedUser.id) {
+              return selectedUser; // Revert to original
+            }
+            return user;
+          })
         )
         
-        // Update cache immediately
+        // Rollback cache
         if (userDataCache.data) {
-          userDataCache.data = userDataCache.data.map(user => 
-            user && user.id === selectedUser.id ? updatedUserData : user
-          );
+          userDataCache.data = userDataCache.data.map(user => {
+            if (user && user.id === selectedUser.id) {
+              return selectedUser; // Revert to original
+            }
+            return user;
+          });
         }
         
-        setIsEditDialogOpen(false)
-        
-        toast({
-          title: "User Updated",
-          description: "User information has been successfully updated.",
-        })
-        
-        // Refresh in background to ensure consistency
-        setTimeout(() => refreshUsers(false), 100)
-      } else {
-        // More descriptive error message
-        const errorMessage = result?.error || 
-          (result && typeof result === 'object' ? JSON.stringify(result) : "Update failed");
-        
+        const errorMessage = result?.error || "Update failed";
         console.error('User update failed:', errorMessage);
         
         toast({
           title: "Error",
-          description: `Failed to update user: ${errorMessage}`,
+          description: `Failed to update user: ${errorMessage}. Changes have been reverted.`,
           variant: "destructive",
         })
       }
     } catch (error: any) {
       console.error('User update error:', error)
+      
+      // Rollback on error
+      setUsers(prevUsers => 
+        prevUsers.map(user => {
+          if (user && user.id === selectedUser.id) {
+            return selectedUser; // Revert to original
+          }
+          return user;
+        })
+      )
+      
+      if (userDataCache.data) {
+        userDataCache.data = userDataCache.data.map(user => {
+          if (user && user.id === selectedUser.id) {
+            return selectedUser; // Revert to original
+          }
+          return user;
+        });
+      }
+      
       toast({
         title: "Error",
-        description: `An unexpected error occurred: ${error.message || 'Unknown error'}`,
+        description: `An unexpected error occurred: ${error.message || 'Unknown error'}. Changes have been reverted.`,
         variant: "destructive",
       })
     } finally {
-      setIsLoading(false)
+      setIsEditingUser(false)
     }
   }
 
@@ -305,7 +358,7 @@ export function UserManagement() {
     }
 
     try {
-      setIsLoading(true); // Show loading state during update
+      setIsSavingCredit(true); // Use dedicated credit loading state
       
       // Validate and prepare credit values
       let creditLimitValue = parseFloat(Number(creditForm.creditLimit).toFixed(2));
@@ -397,7 +450,7 @@ export function UserManagement() {
         variant: "destructive",
       });
     } finally {
-      setIsLoading(false);
+      setIsSavingCredit(false); // Reset dedicated credit loading state
     }
   }
 
@@ -407,7 +460,15 @@ export function UserManagement() {
     try {
       setIsCreatingUser(true);
       
-      // OPTIMIZED: Create optimistic user immediately for instant UI feedback
+      // Save form data for API call
+      const formData = { ...createForm };
+      
+      // Generate the REAL temporary password that will be used in the database
+      const realTempPassword = Math.random().toString(36).slice(-8) + 
+        Math.random().toString(36).slice(-8).toUpperCase() + 
+        Math.floor(Math.random() * 1000);
+      
+      // SYNCHRONIZED: Create optimistic user immediately
       const optimisticUser = {
         id: `temp-${Date.now()}`, // Temporary ID
         name: createForm.name,
@@ -432,16 +493,10 @@ export function UserManagement() {
         userDataCache.data = [optimisticUser, ...userDataCache.data];
       }
       
-      // Close dialog immediately and show success
+      // Close dialog immediately
       setIsCreateDialogOpen(false);
       
-      toast({
-        title: "User Created",
-        description: "New user has been created with a temporary password.",
-      });
-      
-      // Clear the form
-      const formData = { ...createForm }; // Save for potential rollback
+      // Clear the form immediately
       setCreateForm({
         name: "",
         email: "",
@@ -452,91 +507,120 @@ export function UserManagement() {
         address: { street: "", city: "", state: "", zipCode: "" },
       });
       
-      // Proceed with actual user creation in background
-      const result = await createUser({
+      // Show success toast immediately
+      toast({
+        title: "User Created",
+        description: "New user has been created with a temporary password.",
+      });
+      
+      // SYNCHRONIZED: Show password dialog immediately with REAL temp password
+      setSelectedUser(optimisticUser);
+      setGeneratedPassword(realTempPassword);
+      setIsPasswordDialogOpen(true);
+      
+      // Start the API call in background with the pre-generated password
+      const createUserPromise = createUser({
         ...formData,
         isAdmin: false,
         creditUsed: 0,
         company: formData.accountType === "business" ? formData.company : undefined,
         temporaryPassword: true,
         mustChangePassword: true,
+        preGeneratedPassword: realTempPassword, // Send the real password to backend
       });
-
-      if (result?.success) {
-        // Replace optimistic user with real user data
-        if (result.user) {
-          const newUser = {
-            id: result.user.id,
-            name: result.user.name,
-            email: result.user.email,
-            accountType: result.user.accountType,
-            isAdmin: result.user.isAdmin,
-            creditLimit: result.user.creditLimit,
-            creditUsed: result.user.creditUsed,
-            availableCredit: (result.user.creditLimit || 0) - (result.user.creditUsed || 0),
-            company: result.user.company,
-            phone: result.user.phone,
-            address: result.user.address,
-            temporaryPassword: result.user.temporaryPassword,
-            createdAt: new Date().toISOString()
-          };
-          
-          // Replace optimistic user with real data
-          setUsers(prevUsers => 
-            prevUsers.map(u => u.id === optimisticUser.id ? newUser : u)
-          );
-          
-          // Update cache
-          if (userDataCache.data) {
-            userDataCache.data = userDataCache.data.map(u => 
-              u.id === optimisticUser.id ? newUser : u
+      
+      // Handle API response in background
+      createUserPromise.then(result => {
+        if (result?.success) {
+          // Replace optimistic user with real user data
+          if (result.user) {
+            const newUser = {
+              id: result.user.id,
+              name: result.user.name,
+              email: result.user.email,
+              accountType: result.user.accountType,
+              isAdmin: result.user.isAdmin,
+              creditLimit: result.user.creditLimit,
+              creditUsed: result.user.creditUsed,
+              availableCredit: (result.user.creditLimit || 0) - (result.user.creditUsed || 0),
+              company: result.user.company,
+              phone: result.user.phone,
+              address: result.user.address,
+              temporaryPassword: result.user.temporaryPassword,
+              createdAt: new Date().toISOString()
+            };
+            
+            // Replace optimistic user with real data
+            setUsers(prevUsers => 
+              prevUsers.map(u => u.id === optimisticUser.id ? newUser : u)
             );
+            
+            // Update cache
+            if (userDataCache.data) {
+              userDataCache.data = userDataCache.data.map(u => 
+                u.id === optimisticUser.id ? newUser : u
+              );
+            }
+            
+            // Update the selected user for the dialog (if still open)
+            setSelectedUser(newUser);
+            // Don't update password - we already have the correct one from frontend generation
           }
           
-          // Set for password dialog
-          setSelectedUser(newUser);
-          setGeneratedPassword(result.password || "");
-          setIsPasswordDialogOpen(true);
-        }
-        
-        // Refresh admin stats in background
-        setTimeout(() => {
-          if (typeof window !== 'undefined' && window.refreshAdminStats) {
-            window.refreshAdminStats()
+          // Refresh admin stats in background
+          setTimeout(() => {
+            if (typeof window !== 'undefined' && window.refreshAdminStats) {
+              window.refreshAdminStats()
+            }
+          }, 100);
+        } else {
+          // Rollback optimistic update on failure
+          setUsers(prevUsers => prevUsers.filter(u => u.id !== optimisticUser.id));
+          
+          if (userDataCache.data) {
+            userDataCache.data = userDataCache.data.filter(u => u.id !== optimisticUser.id);
           }
-        }, 100);
-      } else {
-        // Rollback optimistic update on failure
-        setUsers(prevUsers => prevUsers.filter(u => u.id !== optimisticUser.id));
+          
+          // Close password dialog and show error
+          setIsPasswordDialogOpen(false);
+          
+          // Restore form data
+          setCreateForm(formData);
+          setIsCreateDialogOpen(true);
+          
+          toast({
+            title: "Error",
+            description: `Failed to create user: ${result?.error || "Unknown error"}`,
+            variant: "destructive",
+          });
+        }
+      }).catch(error => {
+        // Rollback optimistic update on error
+        setUsers(prevUsers => prevUsers.filter(u => u.id === optimisticUser.id ? false : true));
         
         if (userDataCache.data) {
-          userDataCache.data = userDataCache.data.filter(u => u.id !== optimisticUser.id);
+          userDataCache.data = userDataCache.data.filter(u => u.id === optimisticUser.id ? false : true);
         }
         
-        // Restore form data
-        setCreateForm(formData);
-        setIsCreateDialogOpen(true);
+        // Close password dialog and show error
+        setIsPasswordDialogOpen(false);
         
         toast({
           title: "Error",
-          description: `Failed to create user: ${result?.error || "Unknown error"}`,
+          description: "Failed to create user. Please try again.",
           variant: "destructive",
         });
-      }
+      }).finally(() => {
+        setIsCreatingUser(false);
+      });
+      
     } catch (error) {
-      // Rollback optimistic update on error
-      setUsers(prevUsers => prevUsers.filter(u => !u.id.toString().startsWith('temp-')));
-      
-      if (userDataCache.data) {
-        userDataCache.data = userDataCache.data.filter(u => !u.id.toString().startsWith('temp-'));
-      }
-      
+      // Handle immediate errors
       toast({
         title: "Error",
         description: "Failed to create user. Please try again.",
         variant: "destructive",
       });
-    } finally {
       setIsCreatingUser(false);
     }
   }
@@ -544,13 +628,21 @@ export function UserManagement() {
   const handleDeleteUser = async (userId: string) => {
     if (isDeletingUser === userId) return; // Prevent double-clicks
     
+    // Find the user immediately
+    const userToDelete = users.find(u => u.id === userId);
+    if (!userToDelete) return;
+    
+    // INSTANT: Show simple confirmation first (no API calls)
+    const shouldDelete = window.confirm(`Are you sure you want to delete ${userToDelete?.name || userToDelete?.email}?`);
+    
+    if (!shouldDelete) return;
+    
+    // User confirmed - now check for orders and proceed
+    setIsDeletingUser(userId);
+    setSelectedUser(userToDelete);
+    
     try {
-      setIsDeletingUser(userId);
-      
-      // Find the user before deletion
-      const userToDelete = users.find(u => u.id === userId);
-      
-      // First, check if user has orders
+      // Quick order check
       const checkOrdersResponse = await fetch(`/api/admin/users/${userId}/check-orders`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
@@ -559,32 +651,18 @@ export function UserManagement() {
       const orderCheck = await checkOrdersResponse.json();
       
       if (orderCheck.success && orderCheck.hasOrders) {
-        // User has orders - show delete confirmation dialog
-        setSelectedUser(userToDelete || null);
+        // User has orders - show detailed confirmation dialog
         setOrderCount(orderCheck.orderCount);
         setIsDeleteConfirmOpen(true);
-        setIsDeletingUser(null); // Reset loading state for now
-        return;
+        setIsDeletingUser(null); // Reset while showing dialog
       } else {
-        // User has no orders - show simple confirmation
-        const shouldDelete = window.confirm("Are you sure you want to delete this user?");
-        
-        if (!shouldDelete) {
-          setIsDeletingUser(null);
-          return;
-        }
+        // User has no orders - proceed with deletion immediately
+        await performUserDeletion(userId, 0);
       }
-      
-      // Proceed with deletion for users without orders
-      await performUserDeletion(userId, 0);
-      
     } catch (error) {
-      toast({
-        title: "Error",
-        description: "An unexpected error occurred while checking user orders.",
-        variant: "destructive",
-      });
-      setIsDeletingUser(null);
+      // On error, proceed with simple deletion
+      console.error('Error checking orders:', error);
+      await performUserDeletion(userId, 0);
     }
   }
 
@@ -598,9 +676,10 @@ export function UserManagement() {
   }
 
   const performUserDeletion = async (userId: string, expectedOrderCount: number) => {
+    const userToRemove = users.find(u => u.id === userId);
+    
     try {
-      // Optimistic UI update - remove user immediately for faster perceived performance
-      const userToRemove = users.find(u => u.id === userId);
+      // SYNCHRONIZED: Remove from UI and show success toast immediately
       setUsers(prevUsers => prevUsers.filter(u => u.id !== userId));
       
       // Update cache immediately
@@ -608,78 +687,54 @@ export function UserManagement() {
         userDataCache.data = userDataCache.data.filter(u => u.id !== userId);
       }
       
-      // Show immediate success feedback
+      // INSTANT SUCCESS TOAST: Show immediately
       toast({
         title: "User Deleted",
         description: expectedOrderCount > 0 ? 
-          `User and ${expectedOrderCount} orders have been permanently deleted.` : 
-          "User has been completely removed.",
+          `User and ${expectedOrderCount} orders deleted.` : 
+          "User deleted successfully.",
       });
       
-      // Proceed with actual deletion in background
+      // API call in background
       const response = await fetch(`/api/admin/users/${userId}`, {
         method: 'DELETE',
-        headers: { 
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
       });
       
       const result = await response.json();
       
-      if (!response.ok || !result.success) {
-        // Rollback optimistic update on failure
+      if (response.ok && result.success) {
+        // Success - refresh admin stats
+        if (typeof window !== 'undefined' && window.refreshAdminStats) {
+          window.refreshAdminStats();
+        }
+      } else {
+        // API failed - rollback and show error
         if (userToRemove) {
-          setUsers(prevUsers => {
-            // Insert back in correct position (by creation date)
-            const sortedUsers = [...prevUsers, userToRemove].sort((a, b) => 
-              new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-            );
-            return sortedUsers;
-          });
-          
-          // Restore in cache
+          setUsers(prevUsers => [...prevUsers, userToRemove]);
           if (userDataCache.data) {
-            userDataCache.data = [...userDataCache.data, userToRemove].sort((a, b) => 
-              new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-            );
+            userDataCache.data = [...userDataCache.data, userToRemove];
           }
         }
         
         toast({
           title: "Error",
-          description: result.error || "Failed to delete user. Please try again.",
+          description: result.error || "Failed to delete user. User has been restored.",
           variant: "destructive",
         });
-      } else {
-        // Success - refresh admin stats
-        setTimeout(() => {
-          if (typeof window !== 'undefined' && window.refreshAdminStats) {
-            window.refreshAdminStats()
-          }
-        }, 100); // Reduced delay since deletion already completed
       }
     } catch (error) {
-      // Rollback optimistic update on error
-      const userToRemove = users.find(u => u.id === userId);
+      // Network error - rollback and show error
       if (userToRemove) {
-        setUsers(prevUsers => {
-          const sortedUsers = [...prevUsers, userToRemove].sort((a, b) => 
-            new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-          );
-          return sortedUsers;
-        });
-        
-        // Restore in cache
+        setUsers(prevUsers => [...prevUsers, userToRemove]);
         if (userDataCache.data) {
-          userDataCache.data = [...userDataCache.data, userToRemove].sort((a, b) => 
-            new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-          );
+          userDataCache.data = [...userDataCache.data, userToRemove];
         }
       }
       
       toast({
         title: "Error",
-        description: "An unexpected error occurred while deleting the user.",
+        description: "Network error during deletion. User has been restored.",
         variant: "destructive",
       });
     } finally {
@@ -873,8 +928,13 @@ export function UserManagement() {
               <SelectItem value="temp-password">Temporary Passwords</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="outline" onClick={() => refreshUsers(true)}>
-            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+          <Button variant="outline" onClick={() => {
+            setIsRefreshing(true);
+            refreshUsers(true).finally(() => {
+              setIsRefreshing(false);
+            });
+          }}>
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
           </Button>
         </div>
 
@@ -1119,11 +1179,11 @@ export function UserManagement() {
             </div>
 
             <div className="flex justify-end space-x-2">
-              <Button variant="outline" onClick={() => setIsEditDialogOpen(false)} disabled={isLoading}>
+              <Button variant="outline" onClick={() => setIsEditDialogOpen(false)} disabled={isEditingUser}>
                 Cancel
               </Button>
-              <Button onClick={handleSaveUser} disabled={isLoading}>
-                {isLoading ? "Saving..." : "Save Changes"}
+              <Button onClick={handleSaveUser} disabled={isEditingUser}>
+                {isEditingUser ? "Saving..." : "Save Changes"}
               </Button>
             </div>
           </div>
@@ -1165,11 +1225,11 @@ export function UserManagement() {
               <p className="mt-1">Debug info: Credit limit is stored as a decimal number in the database.</p>
             </div>
             <div className="flex justify-end space-x-2">
-              <Button variant="outline" onClick={() => setIsCreditDialogOpen(false)} disabled={isLoading}>
+              <Button variant="outline" onClick={() => setIsCreditDialogOpen(false)} disabled={isSavingCredit}>
                 Cancel
               </Button>
-              <Button onClick={handleSaveCredit} disabled={isLoading}>
-                {isLoading ? "Saving..." : "Save Changes"}
+              <Button onClick={handleSaveCredit} disabled={isSavingCredit}>
+                {isSavingCredit ? "Saving..." : "Save Changes"}
               </Button>
             </div>
           </div>
@@ -1193,6 +1253,11 @@ export function UserManagement() {
                   <Copy className="h-4 w-4" />
                 </Button>
               </div>
+              {selectedUser?.id?.toString().startsWith('temp-') && (
+                <p className="text-xs text-yellow-700 mt-2">
+                  <strong>Note:</strong> The password above is the exact password that will be stored in the database. It is immediately usable for login.
+                </p>
+              )}
             </div>
             <div className="bg-blue-50 p-4 rounded-lg">
               <p className="text-sm text-blue-800">
