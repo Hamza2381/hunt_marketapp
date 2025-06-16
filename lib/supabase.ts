@@ -88,5 +88,6 @@ export interface ChatMessage {
   sender_id: string
   message: string
   is_admin: boolean
+  read: boolean
   created_at: string
 }

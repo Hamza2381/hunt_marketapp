@@ -7,9 +7,10 @@ import { UserManagement } from "./user-management"
 import { ProductManagement } from "./product-management"
 import { CategoryManagement } from "./category-management"
 import { OrderManagement } from "./order-management"
+import { DealManagement } from "./deals/deal-management"
 import { ChatManagement } from "./chat-management"
 import { AdminPageWrapper } from "./admin-page-wrapper"
-import { Users, Package, ShoppingCart, DollarSign, TrendingUp, MessageCircle, Loader2, AlertTriangle } from "lucide-react"
+import { Users, Package, ShoppingCart, DollarSign, TrendingUp, MessageCircle, Loader2, AlertTriangle, Percent } from "lucide-react"
 import { useAuth } from "@/hooks/use-auth"
 import { AdminStatusChecker } from "@/lib/admin-status-checker"
 
@@ -168,10 +169,11 @@ export function AdminDashboard() {
 
           {/* Management Tabs */}
           <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-            <TabsList className="grid w-full grid-cols-5">
+            <TabsList className="grid w-full grid-cols-6">
               <TabsTrigger value="users">Users</TabsTrigger>
               <TabsTrigger value="products">Products</TabsTrigger>
               <TabsTrigger value="categories">Categories</TabsTrigger>
+              <TabsTrigger value="deals">Deals</TabsTrigger>
               <TabsTrigger value="orders">Orders</TabsTrigger>
               <TabsTrigger value="chat">
                 <MessageCircle className="h-4 w-4 mr-2" />
@@ -191,12 +193,17 @@ export function AdminDashboard() {
               <CategoryManagement />
             </TabsContent>
 
+            <TabsContent value="deals" className="m-0">
+              <DealManagement />
+            </TabsContent>
+
             <TabsContent value="orders" className="m-0">
               <OrderManagement />
             </TabsContent>
 
             <TabsContent value="chat" className="m-0">
-              <ChatManagement />
+              {/* Pass user data directly to ChatManagement */}
+              <ChatManagement user={user} isAdmin={isAdmin} />
             </TabsContent>
           </Tabs>
         </div>

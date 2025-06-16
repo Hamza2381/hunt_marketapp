@@ -22,7 +22,7 @@ interface Product {
   status: string
   image_url?: string
   created_at: string
-  category_name?: string
+  category_name: string // This comes from the API join with categories table
   rating?: number
   reviews?: number
 }
@@ -54,24 +54,9 @@ export function ProductGrid({
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   
-  // Create category lookup map for fast category name resolution
-  const categoryMap = useMemo(() => {
-    const map = new Map<number, string>()
-    categories.forEach(cat => map.set(cat.id, cat.name))
-    return map
-  }, [categories])
-  
-  // Enhanced products with category names
-  const enhancedProducts = useMemo(() => {
-    return products.map(product => ({
-      ...product,
-      category_name: categoryMap.get(product.category_id) || 'Unknown Category'
-    }))
-  }, [products, categoryMap])
-  
-  // Apply filters and sorting
+  // Apply filters and sorting - products already come with category_name from the API
   const filteredProducts = useMemo(() => {
-    let filtered = [...enhancedProducts]
+    let filtered = [...products]
     
     // Apply category filter
     if (categoryFilter) {
@@ -113,7 +98,7 @@ export function ProductGrid({
     }
     
     return filtered
-  }, [enhancedProducts, categoryFilter, searchQuery, sortOrder])
+  }, [products, categoryFilter, searchQuery, sortOrder])
 
   const fetchProducts = async () => {
     try {
@@ -160,7 +145,7 @@ export function ProductGrid({
     } finally {
       setIsLoading(false)
     }
-  } // Added isLoading to dependencies
+  }
   
   useEffect(() => {
     fetchProducts()
@@ -207,6 +192,12 @@ export function ProductGrid({
     fastCache.clear(cacheKey)
     fetchProducts()
   }
+
+  // Clear cache on component mount to ensure fresh data
+  useEffect(() => {
+    const cacheKey = onlyFeatured ? CACHE_KEYS.PRODUCTS_FEATURED : CACHE_KEYS.PRODUCTS
+    fastCache.clear(cacheKey)
+  }, [])
 
   if (isLoading) {
     return (
@@ -311,7 +302,7 @@ export function ProductGrid({
 
               <div className="space-y-2">
                 <Badge variant="outline" className="text-xs">
-                  {product.category_name}
+                  {product.category_name || 'Uncategorized'}
                 </Badge>
 
                 <Link href={`/products/${product.id}`}>

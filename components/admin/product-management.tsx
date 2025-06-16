@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import {
   Dialog,
@@ -18,11 +19,12 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Plus, Edit, Trash2, Search, Package, Loader2, AlertTriangle, RefreshCw, Upload, Image as ImageIcon } from "lucide-react"
+import { Plus, Edit, Trash2, Search, Package, Loader2, AlertTriangle, RefreshCw, Upload, Image as ImageIcon, Star } from "lucide-react"
 import { supabase } from "@/lib/supabase-client"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/hooks/use-auth"
 import type { Product, Category } from "@/lib/supabase"
+import { emitProductChange } from "@/lib/global-events"
 
 import { AdminCache } from "@/lib/admin-cache"
 import { 
@@ -68,6 +70,7 @@ export function ProductManagement() {
     description: "",
     status: "active",
     image_url: "",
+    is_featured: false,
   })
 
   // Memoized form reset function
@@ -81,6 +84,7 @@ export function ProductManagement() {
       description: "",
       status: "active",
       image_url: "",
+      is_featured: false,
     })
     setOperationState('idle')
   }, [])
@@ -349,7 +353,7 @@ export function ProductManagement() {
         stock_quantity: productForm.stock_quantity,
         status: productForm.stock_quantity > 0 ? productForm.status as any : 'out_of_stock',
         image_url: productForm.image_url || null,
-        is_featured: false,
+        is_featured: productForm.is_featured,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }
@@ -379,6 +383,7 @@ export function ProductManagement() {
           stock_quantity: optimisticProduct.stock_quantity,
           status: optimisticProduct.status,
           image_url: optimisticProduct.image_url,
+          is_featured: optimisticProduct.is_featured,
         })
       })
 
@@ -415,6 +420,9 @@ export function ProductManagement() {
       setProducts(prev => prev.map(p => 
         p.id === optimisticProduct.id ? result.data : p
       ))
+      
+      // Emit global event for real-time updates
+      emitProductChange('added', result.data)
       
       // Refresh admin stats after successful product addition
       if (typeof window !== 'undefined' && window.refreshAdminStats) {
@@ -475,6 +483,7 @@ export function ProductManagement() {
         stock_quantity: productForm.stock_quantity,
         status: productForm.stock_quantity > 0 ? productForm.status as any : 'out_of_stock',
         image_url: productForm.image_url || null,
+        is_featured: productForm.is_featured,
         updated_at: new Date().toISOString(),
       }
 
@@ -508,6 +517,7 @@ export function ProductManagement() {
           stock_quantity: updatedProduct.stock_quantity,
           status: updatedProduct.status,
           image_url: updatedProduct.image_url,
+          is_featured: updatedProduct.is_featured,
         })
       })
 
@@ -538,6 +548,17 @@ export function ProductManagement() {
       
       if (!result.success) {
         throw new Error(result.error || 'Failed to update product')
+      }
+
+      // Emit global event for real-time updates
+      // Check if category changed to handle count updates properly
+      if (selectedProduct.category_id !== updatedProduct.category_id) {
+        // Product moved to different category - emit delete for old category, add for new
+        emitProductChange('deleted', selectedProduct) // Remove from old category
+        emitProductChange('added', updatedProduct)    // Add to new category
+      } else {
+        // Same category - just update
+        emitProductChange('updated', updatedProduct)
       }
 
     } catch (err: any) {
@@ -618,6 +639,9 @@ export function ProductManagement() {
         throw new Error(result.error || 'Failed to delete product')
       }
       
+      // Emit global event for real-time updates
+      emitProductChange('deleted', product)
+      
       // Refresh admin stats after successful product deletion
       if (typeof window !== 'undefined' && window.refreshAdminStats) {
         window.refreshAdminStats()
@@ -667,6 +691,7 @@ export function ProductManagement() {
       description: product.description || '',
       status: product.status,
       image_url: product.image_url || '',
+      is_featured: product.is_featured || false,
     })
     setIsEditProductOpen(true)
   }, [operationState, toast])
@@ -795,6 +820,21 @@ export function ProductManagement() {
                       </SelectContent>
                     </Select>
                   </div>
+                </div>
+                <div className="grid gap-2">
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="featured"
+                      checked={productForm.is_featured}
+                      onCheckedChange={(checked) => setProductForm({ ...productForm, is_featured: !!checked })}
+                      disabled={isOperationInProgress}
+                    />
+                    <Label htmlFor="featured" className="flex items-center space-x-2">
+                      <Star className="h-4 w-4 text-yellow-500" />
+                      <span>Mark as Featured Product</span>
+                    </Label>
+                  </div>
+                  <p className="text-xs text-gray-500 ml-6">Featured products will be displayed prominently on the homepage</p>
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="product-image">Product Image</Label>
@@ -931,6 +971,7 @@ export function ProductManagement() {
                 <TableHead>Price</TableHead>
                 <TableHead>Stock</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Featured</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -975,6 +1016,19 @@ export function ProductManagement() {
                     >
                       {product.status === "active" ? "Active" : product.status === "inactive" ? "Inactive" : "Out of Stock"}
                     </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center">
+                      {product.is_featured ? (
+                        <Badge variant="default" className="bg-yellow-500 hover:bg-yellow-600">
+                          ⭐ Featured
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-gray-500">
+                          Not Featured
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>
                     <div className="flex space-x-2">
@@ -1095,6 +1149,21 @@ export function ProductManagement() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            <div className="grid gap-2">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="edit-featured"
+                  checked={productForm.is_featured}
+                  onCheckedChange={(checked) => setProductForm({ ...productForm, is_featured: !!checked })}
+                  disabled={isOperationInProgress}
+                />
+                <Label htmlFor="edit-featured" className="flex items-center space-x-2">
+                  <Star className="h-4 w-4 text-yellow-500" />
+                  <span>Mark as Featured Product</span>
+                </Label>
+              </div>
+              <p className="text-xs text-gray-500 ml-6">Featured products will be displayed prominently on the homepage</p>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="edit-product-image">Product Image</Label>

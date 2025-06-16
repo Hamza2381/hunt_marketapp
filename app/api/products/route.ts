@@ -95,12 +95,12 @@ export async function GET(request: NextRequest) {
     const category = searchParams.get('category')
     const limit = searchParams.get('limit')
     
-    // Build query
+    // Build query - using simpler approach without foreign key naming issues
     let query = supabase
       .from('products')
       .select(`
         *,
-        categories!products_category_id_fkey (
+        categories (
           id,
           name
         )
