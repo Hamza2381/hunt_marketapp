@@ -155,10 +155,20 @@ export function useAuth() {
     }
   }, [loadUserProfile])
 
-  // SIMPLIFIED auth state change handler with better error handling
+  // SIMPLIFIED auth state change handler with better error handling and debounce
   useEffect(() => {
+    let debounceTimer: NodeJS.Timeout
+    
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
       console.log('🔄 Auth state changed:', event, 'Session exists:', !!currentSession)
+      
+      // Clear any pending state changes to prevent rapid firing
+      if (debounceTimer) {
+        clearTimeout(debounceTimer)
+      }
+      
+      // Debounce auth state changes slightly to prevent rapid state updates
+      debounceTimer = setTimeout(async () => {
       
       try {
         setSession(currentSession)
@@ -195,9 +205,13 @@ export function useAuth() {
         console.error('❌ Auth state change error:', error)
         setIsLoading(false)
       }
+      }, 50) // 50ms debounce
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      subscription.unsubscribe()
+    }
   }, [loadUserProfile]) // Removed 'user' dependency to prevent infinite loop
 
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {

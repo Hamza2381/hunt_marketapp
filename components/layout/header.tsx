@@ -37,6 +37,12 @@ export function Header() {
   const { getItemCount, items } = useCart()
   const [cartItemCount, setCartItemCount] = useState(0)
   const [scrolled, setScrolled] = useState(false)
+  const [isHydrated, setIsHydrated] = useState(false)
+  
+  // Prevent hydration mismatch
+  useEffect(() => {
+    setIsHydrated(true)
+  }, [])
   
   // Update cart item count whenever items change
   useEffect(() => {
@@ -78,8 +84,48 @@ export function Header() {
 
   const isAdmin = user?.isAdmin === true
 
+  // Prevent hydration mismatch for auth-dependent content
+  if (!isHydrated) {
+    return (
+      <header className={`sticky top-0 z-50 transition-all duration-300 bg-white`}>
+        <div className="bg-gradient-to-r from-green-600/10 via-transparent to-blue-600/5 h-1 w-full"></div>
+        <div className="container mx-auto px-4 py-3">
+          <div className="flex items-center justify-between">
+            {/* Logo */}
+            <Link href="/" className="flex items-center space-x-2 group">
+              <div className="relative h-10 w-10 overflow-hidden rounded-md transition-transform duration-300 group-hover:scale-105">
+                <Image 
+                  src="/marketlogo.jpeg" 
+                  alt="BizMart Logo" 
+                  fill 
+                  sizes="40px"
+                  className="object-contain"
+                />
+              </div>
+              <span className="font-bold text-xl bg-clip-text text-transparent bg-gradient-to-r from-green-600 to-green-700">BizMart</span>
+            </Link>
+            
+            {/* Desktop Navigation */}
+            <nav className="hidden md:flex items-center space-x-8">
+              <Link href="/" className="text-sm font-medium text-gray-600 hover:text-green-600">Home</Link>
+              <Link href="/products" className="text-sm font-medium text-gray-600 hover:text-green-600">Products</Link>
+              <Link href="/categories" className="text-sm font-medium text-gray-600 hover:text-green-600">Categories</Link>
+              <Link href="/deals" className="text-sm font-medium text-gray-600 hover:text-green-600">Deals</Link>
+              <Link href="/contact" className="text-sm font-medium text-gray-600 hover:text-green-600">Contact</Link>
+            </nav>
+            
+            {/* Loading placeholder for auth section */}
+            <div className="flex items-center space-x-4">
+              <div className="w-20 h-8 bg-gray-200 rounded animate-pulse"></div>
+            </div>
+          </div>
+        </div>
+      </header>
+    )
+  }
+
   return (
-    <header className={`sticky top-0 z-50 transition-all duration-300 ${scrolled ? 'bg-white/80 backdrop-blur-md shadow-md' : 'bg-white'}`}>
+    <header className={`sticky top-0 z-50 transition-all duration-300 ${scrolled ? 'bg-white/80 backdrop-blur-md shadow-md' : 'bg-white'}`} suppressHydrationWarning>
       <div className="bg-gradient-to-r from-green-600/10 via-transparent to-blue-600/5 h-1 w-full"></div>
       <div className="container mx-auto px-4 py-3">
         <div className="flex items-center justify-between">
