@@ -137,6 +137,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       data: transformedDeals
+    }, {
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
     })
 
   } catch (error) {

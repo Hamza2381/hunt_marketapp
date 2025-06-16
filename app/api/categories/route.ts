@@ -28,16 +28,8 @@ export async function GET() {
       }, { status: 500 })
     }
     
-    // Check cache first
-    const now = Date.now()
-    if (categoriesCache && now < cacheExpiry) {
-      return NextResponse.json({
-        success: true,
-        data: categoriesCache,
-        count: categoriesCache.length,
-        cached: true
-      })
-    }
+    // Disable server-side caching in production to prevent stale data
+    // Always fetch fresh data from database
     
     const supabase = createClient(supabaseUrl, supabaseAnonKey)
     
@@ -53,9 +45,8 @@ export async function GET() {
       return await getCategoriesManually(supabase)
     }
     
-    // Cache the results
+    // Store in memory but don't rely on it for serving
     categoriesCache = categoriesData || []
-    cacheExpiry = now + CACHE_TTL
     
     if (process.env.NODE_ENV === 'development') {
       console.log(`Fetched ${categoriesCache.length} categories with counts`)
@@ -65,6 +56,12 @@ export async function GET() {
       success: true,
       data: categoriesCache,
       count: categoriesCache.length
+    }, {
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
     })
     
   } catch (error: any) {
@@ -107,6 +104,12 @@ async function getCategoriesManually(supabase: any) {
         data: defaultCategories,
         count: defaultCategories.length,
         note: 'Using default categories - database appears to be empty'
+      }, {
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        }
       })
     }
     
@@ -136,9 +139,8 @@ async function getCategoriesManually(supabase: any) {
       productCount: countMap.get(category.id) || 0
     }))
     
-    // Cache the results
+    // Store in memory but don't rely on it for serving
     categoriesCache = categoriesWithCounts
-    cacheExpiry = Date.now() + CACHE_TTL
     
     if (process.env.NODE_ENV === 'development') {
       console.log(`Fetched ${categoriesWithCounts.length} categories manually`)
@@ -148,6 +150,12 @@ async function getCategoriesManually(supabase: any) {
       success: true,
       data: categoriesWithCounts,
       count: categoriesWithCounts.length
+    }, {
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
     })
     
   } catch (error: any) {
