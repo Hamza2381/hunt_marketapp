@@ -19,7 +19,9 @@ export function CategoryNav() {
   useEffect(() => {
     const fetchCategories = async () => {
       try {
-        const response = await fetch('/api/categories', {
+        // Add timestamp to prevent any caching
+        const timestamp = new Date().getTime()
+        const response = await fetch(`/api/categories?_t=${timestamp}`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',

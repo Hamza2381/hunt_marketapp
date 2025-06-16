@@ -55,7 +55,8 @@ export function FeaturedDeals() {
       setError(null)
       
       // REAL-TIME: No caching - always fetch fresh data
-      const response = await fetch('/api/deals?featured=true&limit=4', {
+      const timestamp = new Date().getTime()
+      const response = await fetch(`/api/deals?featured=true&limit=4&_t=${timestamp}`, {
         method: 'GET',
         headers: { 
           'Content-Type': 'application/json',

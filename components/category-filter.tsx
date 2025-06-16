@@ -33,7 +33,9 @@ export function CategoryFilter({ selectedCategory, onSelectCategory, onCategorie
       // FORCE FRESH DATA: Always fetch from API, no client-side caching
       console.log('Fetching categories from API...')
       
-      const response = await fetch('/api/categories', {
+      // Add timestamp to prevent any caching
+      const timestamp = new Date().getTime()
+      const response = await fetch(`/api/categories?_t=${timestamp}`, {
         method: 'GET',
         headers: { 
           'Content-Type': 'application/json',
