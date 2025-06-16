@@ -24,7 +24,7 @@ const nextConfig = {
   experimental: {
     scrollRestoration: true,
   },
-  // Force no caching for API routes and static assets
+  // Force no caching for API routes
   async headers() {
     return [
       {
@@ -32,7 +32,7 @@ const nextConfig = {
         headers: [
           {
             key: 'Cache-Control',
-            value: 'no-cache, no-store, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0',
+            value: 'no-cache, no-store, must-revalidate',
           },
           {
             key: 'Pragma',
@@ -41,27 +41,6 @@ const nextConfig = {
           {
             key: 'Expires',
             value: '0',
-          },
-          {
-            key: 'CDN-Cache-Control',
-            value: 'no-cache',
-          },
-          {
-            key: 'Vercel-CDN-Cache-Control',
-            value: 'no-cache',
-          },
-          {
-            key: 'X-Accel-Expires',
-            value: '0',
-          },
-        ],
-      },
-      {
-        source: '/((?!_next/static|_next/image|favicon.ico).*)',
-        headers: [
-          {
-            key: 'Cache-Control',
-            value: 'no-cache, no-store, must-revalidate',
           },
         ],
       },
