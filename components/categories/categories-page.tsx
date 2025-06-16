@@ -28,7 +28,9 @@ export function CategoriesPage() {
 
       // FORCE FRESH DATA: No client-side caching
       // Fetch categories
-      const categoriesResponse = await fetch('/api/categories', {
+      const timestamp = Date.now()
+      const randomParam = Math.random().toString(36)
+      const categoriesResponse = await fetch(`/api/categories?_t=${timestamp}&_r=${randomParam}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -51,7 +53,9 @@ export function CategoriesPage() {
         categoriesData.map(async (category: Category) => {
           try {
             const slug = createSlug(category.name)
-            const productsResponse = await fetch(`/api/categories/${slug}`, {
+            const timestamp2 = Date.now()
+            const randomParam2 = Math.random().toString(36)
+            const productsResponse = await fetch(`/api/categories/${slug}?_t=${timestamp2}&_r=${randomParam2}`, {
               method: 'GET',
               headers: {
                 'Content-Type': 'application/json',
@@ -90,6 +94,7 @@ export function CategoriesPage() {
   // Optimistic update for real-time product count changes
   const handleInventoryChange = useCallback((event: { type: string; product: any }) => {
     setCategories(prev => {
+      // Real-time updates for category product counts  
       const updatedCategories = prev.map(category => {
         if (category.id === event.product.category_id) {
           const currentCount = category.productCount || 0
@@ -121,9 +126,7 @@ export function CategoriesPage() {
         return category
       })
       
-      // Update cache with new data
-      fastCache.set(CACHE_KEYS.CATEGORIES, updatedCategories, 2 * 60 * 1000)
-      
+      // NO CACHING: Just return updated data
       return updatedCategories
     })
   }, [])

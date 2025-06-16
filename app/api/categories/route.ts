@@ -4,16 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
-// Enhanced caching for categories with product counts
-let categoriesCache: any[] | null = null
-let cacheExpiry = 0
-const CACHE_TTL = 3 * 60 * 1000 // 3 minutes
-
-// Function to clear cache (useful for real-time updates)
-export function clearCategoriesCache() {
-  categoriesCache = null
-  cacheExpiry = 0
-}
+// NO SERVER-SIDE CACHING - Follow products API pattern
 
 export async function GET() {
   try {
@@ -28,12 +19,10 @@ export async function GET() {
       }, { status: 500 })
     }
     
-    // Disable server-side caching in production to prevent stale data
-    // Always fetch fresh data from database
-    
+    // NO SERVER-SIDE CACHING - Always fetch fresh from database like products API
     const supabase = createClient(supabaseUrl, supabaseAnonKey)
     
-    // Optimized single query to get categories with product counts
+    // Try optimized query first
     const { data: categoriesData, error } = await supabase
       .rpc('get_categories_with_product_counts')
     
@@ -45,17 +34,14 @@ export async function GET() {
       return await getCategoriesManually(supabase)
     }
     
-    // Store in memory but don't rely on it for serving
-    categoriesCache = categoriesData || []
-    
     if (process.env.NODE_ENV === 'development') {
-      console.log(`Fetched ${categoriesCache.length} categories with counts`)
+      console.log(`Fetched ${(categoriesData || []).length} categories with counts`)
     }
     
     return NextResponse.json({
       success: true,
-      data: categoriesCache,
-      count: categoriesCache.length
+      data: categoriesData || [],
+      count: (categoriesData || []).length
     }, {
       headers: {
         'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -133,14 +119,11 @@ async function getCategoriesManually(supabase: any) {
       })
     }
     
-    // Combine categories with their counts
+    // Store result but don't use for caching
     const categoriesWithCounts = categories.map(category => ({
       ...category,
       productCount: countMap.get(category.id) || 0
     }))
-    
-    // Store in memory but don't rely on it for serving
-    categoriesCache = categoriesWithCounts
     
     if (process.env.NODE_ENV === 'development') {
       console.log(`Fetched ${categoriesWithCounts.length} categories manually`)

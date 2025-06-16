@@ -2,6 +2,10 @@
 import { CategoryPage } from "@/components/categories/category-page";
 import type { Metadata } from "next";
 
+// Force dynamic rendering to prevent static build caching
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 interface CategoryPageProps {
   params: Promise<{ slug: string }>;
 }

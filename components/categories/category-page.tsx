@@ -57,7 +57,19 @@ export function CategoryPage({ categorySlug }: CategoryPageProps) {
         setIsLoading(true)
         setError(null)
 
-        const response = await fetch(`/api/categories/${categorySlug}`)
+        // FORCE FRESH DATA - NO CACHING AT ALL
+        const timestamp = Date.now()
+        const randomParam = Math.random().toString(36)
+        const response = await fetch(`/api/categories/${categorySlug}?_t=${timestamp}&_r=${randomParam}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          },
+          cache: 'no-store'
+        })
         const result = await response.json()
 
         if (!result.success) {

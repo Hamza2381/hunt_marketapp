@@ -5,10 +5,7 @@ import { createSlug } from '@/lib/category-utils'
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
-// Cache for category slug to ID mapping
-const categoryCache = new Map<string, { id: number; name: string; description: string | null }>()
-let cacheExpiry = 0
-const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+// NO SERVER-SIDE CACHING - Follow products API pattern
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
   try {
@@ -28,40 +25,30 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     
     const supabase = createClient(supabaseUrl, supabaseAnonKey)
     
-    // Check and refresh category cache if needed
-    const now = Date.now()
-    if (now > cacheExpiry || categoryCache.size === 0) {
-      const { data: categories, error: categoriesError } = await supabase
-        .from('categories')
-        .select('id, name, description')
-      
-      if (categoriesError) {
-        console.error('Error fetching categories:', categoriesError)
-        return NextResponse.json({ 
-          success: false, 
-          error: categoriesError.message 
-        }, { status: 500 })
-      }
-      
-      // Update cache
-      categoryCache.clear()
-      categories?.forEach(cat => {
-        categoryCache.set(createSlug(cat.name), cat)
-      })
-      cacheExpiry = now + CACHE_TTL
+    // NO CACHING - Always fetch fresh categories from database
+    const { data: categories, error: categoriesError } = await supabase
+      .from('categories')
+      .select('id, name, description')
+    
+    if (categoriesError) {
+      console.error('Error fetching categories:', categoriesError)
+      return NextResponse.json({ 
+        success: false, 
+        error: categoriesError.message 
+      }, { status: 500 })
     }
     
-    // Find the category from cache
-    const category = categoryCache.get(slug)
+    // Find the category by slug
+    const category = categories?.find(cat => createSlug(cat.name) === slug)
     
     if (!category) {
       return NextResponse.json({ 
         success: false, 
         error: 'Category not found',
-        availableCategories: Array.from(categoryCache.entries()).map(([slug, cat]) => ({ 
+        availableCategories: categories?.map(cat => ({ 
           name: cat.name, 
-          slug 
-        }))
+          slug: createSlug(cat.name)
+        })) || []
       }, { status: 404 })
     }
     
@@ -103,6 +90,12 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       },
       products: transformedProducts,
       count: transformedProducts.length
+    }, {
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
     })
     
   } catch (error: any) {

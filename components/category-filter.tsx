@@ -91,6 +91,7 @@ export function CategoryFilter({ selectedCategory, onSelectCategory, onCategorie
   // Real-time updates for category product counts
   const handleInventoryChange = useCallback((event: { type: string; product: any }) => {
     setCategories(prev => {
+      // Real-time updates for category product counts
       const updatedCategories = prev.map(category => {
         if (category.id === event.product.category_id) {
           const currentCount = category.productCount || 0
@@ -117,8 +118,7 @@ export function CategoryFilter({ selectedCategory, onSelectCategory, onCategorie
         return category
       })
       
-      // Update cache with new data
-      fastCache.set('categories-filter', updatedCategories, 5 * 60 * 1000)
+      // NO CACHING: Just return updated data
       return updatedCategories
     })
   }, [])
