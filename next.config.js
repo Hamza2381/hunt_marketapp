@@ -24,6 +24,36 @@ const nextConfig = {
   experimental: {
     scrollRestoration: true,
   },
+  // Force no caching for API routes
+  async headers() {
+    return [
+      {
+        source: '/api/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'no-cache, no-store, must-revalidate, proxy-revalidate, max-age=0',
+          },
+          {
+            key: 'Pragma',
+            value: 'no-cache',
+          },
+          {
+            key: 'Expires',
+            value: '0',
+          },
+          {
+            key: 'CDN-Cache-Control',
+            value: 'no-cache',
+          },
+          {
+            key: 'Vercel-CDN-Cache-Control',
+            value: 'no-cache',
+          },
+        ],
+      },
+    ]
+  },
   // Environment variables
   env: {
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,

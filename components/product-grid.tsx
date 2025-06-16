@@ -105,20 +105,17 @@ export function ProductGrid({
       setIsLoading(true)
       setError(null)
       
-      // Check cache first
-      const cacheKey = onlyFeatured ? CACHE_KEYS.PRODUCTS_FEATURED : CACHE_KEYS.PRODUCTS
-      const cached = fastCache.get<Product[]>(cacheKey)
-      
-      if (cached) {
-        setProducts(cached)
-        setIsLoading(false)
-        return
-      }
-      
+      // FORCE FRESH DATA: No client-side caching
       const response = await fetch(`/api/products${onlyFeatured ? '?featured=true' : ''}`, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include'
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        },
+        credentials: 'include',
+        cache: 'no-store' // Force no browser caching
       })
       
       if (!response.ok) {
@@ -133,9 +130,7 @@ export function ProductGrid({
       
       const productsData = result.data || []
       
-      // Cache the results for 5 minutes
-      fastCache.set(cacheKey, productsData, 5 * 60 * 1000)
-      
+      // NO CACHING: Always use fresh data
       setProducts(productsData)
       
     } catch (err: any) {
@@ -187,17 +182,12 @@ export function ProductGrid({
   }
 
   const handleRetry = () => {
-    // Clear cache and retry
-    const cacheKey = onlyFeatured ? CACHE_KEYS.PRODUCTS_FEATURED : CACHE_KEYS.PRODUCTS
-    fastCache.clear(cacheKey)
+    // NO CACHE TO CLEAR: Just refetch
     fetchProducts()
   }
 
-  // Clear cache on component mount to ensure fresh data
-  useEffect(() => {
-    const cacheKey = onlyFeatured ? CACHE_KEYS.PRODUCTS_FEATURED : CACHE_KEYS.PRODUCTS
-    fastCache.clear(cacheKey)
-  }, [])
+  // Remove the cache clearing on mount
+  // Always fetch fresh data
 
   if (isLoading) {
     return (

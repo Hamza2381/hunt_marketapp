@@ -30,21 +30,18 @@ export function CategoryFilter({ selectedCategory, onSelectCategory, onCategorie
       setIsLoading(true)
       setError(null)
       
-      // Use a different cache key for the filter to avoid conflicts
-      const cached = fastCache.get<Category[]>('categories-filter')
-      if (cached) {
-        console.log('Categories loaded from cache for filter')
-        setCategories(cached)
-        setIsLoading(false)
-        onCategoriesLoaded?.(cached)
-        return
-      }
-      
-      console.log('Fetching categories from API for filter...')
+      // FORCE FRESH DATA: Always fetch from API, no client-side caching
+      console.log('Fetching categories from API...')
       
       const response = await fetch('/api/categories', {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        },
+        cache: 'no-store' // Force no browser caching
       })
       
       if (!response.ok) {
@@ -62,11 +59,9 @@ export function CategoryFilter({ selectedCategory, onSelectCategory, onCategorie
       }
       
       const categoriesData = result.data || []
-      console.log('Categories fetched successfully for filter:', categoriesData.length)
+      console.log('Categories fetched successfully:', categoriesData.length)
       
-      // Cache the results for 5 minutes (shorter than main categories page)
-      fastCache.set('categories-filter', categoriesData, 5 * 60 * 1000)
-      
+      // NO CACHING: Always use fresh data
       setCategories(categoriesData)
       onCategoriesLoaded?.(categoriesData)
       
@@ -139,8 +134,7 @@ export function CategoryFilter({ selectedCategory, onSelectCategory, onCategorie
   }, [handleInventoryChange])
   
   const handleRetry = () => {
-    // Clear cache and retry
-    fastCache.clear('categories-filter')
+    // NO CACHE TO CLEAR: Just refetch
     fetchCategories()
   }
   

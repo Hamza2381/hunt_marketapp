@@ -26,16 +26,18 @@ export function CategoriesPage() {
       setIsLoading(true)
       setError(null)
 
-      // Check cache first
-      const cached = fastCache.get<Category[]>(CACHE_KEYS.CATEGORIES)
-      if (cached) {
-        setCategories(cached)
-        setIsLoading(false)
-        return
-      }
-
+      // FORCE FRESH DATA: No client-side caching
       // Fetch categories
-      const categoriesResponse = await fetch('/api/categories')
+      const categoriesResponse = await fetch('/api/categories', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        },
+        cache: 'no-store'
+      })
       const categoriesResult = await categoriesResponse.json()
       
       if (!categoriesResult.success) {
@@ -49,7 +51,16 @@ export function CategoriesPage() {
         categoriesData.map(async (category: Category) => {
           try {
             const slug = createSlug(category.name)
-            const productsResponse = await fetch(`/api/categories/${slug}`)
+            const productsResponse = await fetch(`/api/categories/${slug}`, {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0'
+              },
+              cache: 'no-store'
+            })
             const productsResult = await productsResponse.json()
             
             return {
@@ -66,8 +77,7 @@ export function CategoriesPage() {
         })
       )
 
-      // Cache the results
-      fastCache.set(CACHE_KEYS.CATEGORIES, categoriesWithCounts, 2 * 60 * 1000) // 2 minutes cache
+      // NO CACHING: Always use fresh data
       setCategories(categoriesWithCounts)
     } catch (error: any) {
       console.error('Error fetching categories:', error)
