@@ -44,9 +44,13 @@ export async function GET() {
       count: (categoriesData || []).length
     }, {
       headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Cache-Control': 'no-cache, no-store, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0',
         'Pragma': 'no-cache',
-        'Expires': '0'
+        'Expires': '0',
+        'CDN-Cache-Control': 'no-cache',
+        'Vercel-CDN-Cache-Control': 'no-cache',
+        'Surrogate-Control': 'no-cache',
+        'X-Accel-Expires': '0'
       }
     })
     
@@ -92,9 +96,13 @@ async function getCategoriesManually(supabase: any) {
         note: 'Using default categories - database appears to be empty'
       }, {
         headers: {
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Cache-Control': 'no-cache, no-store, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0',
           'Pragma': 'no-cache',
-          'Expires': '0'
+          'Expires': '0',
+          'CDN-Cache-Control': 'no-cache',
+          'Vercel-CDN-Cache-Control': 'no-cache',
+          'Surrogate-Control': 'no-cache',
+          'X-Accel-Expires': '0'
         }
       })
     }
@@ -135,9 +143,13 @@ async function getCategoriesManually(supabase: any) {
       count: categoriesWithCounts.length
     }, {
       headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Cache-Control': 'no-cache, no-store, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0',
         'Pragma': 'no-cache',
-        'Expires': '0'
+        'Expires': '0',
+        'CDN-Cache-Control': 'no-cache',
+        'Vercel-CDN-Cache-Control': 'no-cache',
+        'Surrogate-Control': 'no-cache',
+        'X-Accel-Expires': '0'
       }
     })
     

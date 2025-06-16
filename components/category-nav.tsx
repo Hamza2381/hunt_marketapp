@@ -5,55 +5,32 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Menu } from "lucide-react"
 import { getCategoryIcon, createSlug } from "@/lib/category-utils"
-
-interface Category {
-  id: number
-  name: string
-  description?: string
-}
+import { useCategories } from "@/hooks/use-categories"
 
 export function CategoryNav() {
-  const [categories, setCategories] = useState<Category[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  const { categories, isLoading } = useCategories()
+  const [isMounted, setIsMounted] = useState(false)
 
   useEffect(() => {
-    const fetchCategories = async () => {
-      try {
-        // FORCE FRESH DATA - NO CACHING AT ALL
-        const timestamp = Date.now()
-        const randomParam = Math.random().toString(36)
-        const response = await fetch(`/api/categories?_t=${timestamp}&_r=${randomParam}`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0'
-          },
-          cache: 'no-store'
-        })
-        const result = await response.json()
-        
-        if (result.success) {
-          setCategories(result.data || [])
-        } else {
-          console.error('Failed to fetch categories:', result.error)
-        }
-      } catch (error) {
-        console.error('Error fetching categories:', error)
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
-    // Fetch immediately
-    fetchCategories()
-    
-    // Also fetch again after a short delay to ensure fresh data
-    const timeoutId = setTimeout(fetchCategories, 100)
-    
-    return () => clearTimeout(timeoutId)
+    setIsMounted(true)
   }, [])
+
+  // Prevent hydration mismatch by not rendering until mounted
+  if (!isMounted) {
+    return (
+      <div className="border-b bg-white">
+        <div className="container mx-auto px-4">
+          <div className="flex items-center space-x-1 py-3">
+            <div className="animate-pulse flex space-x-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="h-8 w-24 bg-gray-200 rounded"></div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (isLoading) {
     return (

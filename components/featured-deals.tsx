@@ -8,120 +8,52 @@ import { Star, ShoppingCart, Loader2, AlertCircle, RefreshCw, Clock, Zap, Flame 
 import { useCart } from "@/hooks/use-cart"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/hooks/use-auth"
-import { fastCache, CACHE_KEYS } from "@/lib/fast-cache"
-
-interface DealProduct {
-  id: number
-  name: string
-  sku: string
-  price: number
-  stock_quantity: number
-  image_url: string
-  status: string
-  deal_id: number
-  deal_title: string
-  deal_type: string
-  original_price: number
-  discounted_price: number
-  savings: number
-  discount_percentage: number
-  time_left: string
-  banner_text?: string
-  usage_limit?: number
-  usage_count: number
-  is_limited_stock: boolean
-}
-
-interface Deal {
-  id: number
-  title: string
-  description: string
-  deal_type: string
-  products: DealProduct[]
-}
+import { useDeals } from "@/hooks/use-deals"
 
 export function FeaturedDeals() {
   const { addItem } = useCart()
   const { toast } = useToast()
   const { isAuthenticated, isLoading } = useAuth()
-  const [deals, setDeals] = useState<Deal[]>([])
-  const [featuredProducts, setFeaturedProducts] = useState<DealProduct[]>([])
-  const [isLoadingDeals, setIsLoadingDeals] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  
-  const fetchFeaturedDeals = async () => {
-    try {
-      setIsLoadingDeals(true)
-      setError(null)
-      
-      // FORCE FRESH DATA - NO CACHING AT ALL
-      const timestamp = Date.now()
-      const randomParam = Math.random().toString(36)
-      const response = await fetch(`/api/deals?featured=true&limit=4&_t=${timestamp}&_r=${randomParam}`, {
-        method: 'GET',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0'
-        },
-        credentials: 'include',
-        cache: 'no-store'
-      })
-      
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`)
-      }
-      
-      const result = await response.json()
-      
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to fetch deals')
-      }
-      
-      // Extract all products from deals
-      const allFeaturedProducts: DealProduct[] = []
-      result.data.forEach((deal: Deal) => {
-        if (deal.products && deal.products.length > 0) {
-          allFeaturedProducts.push(...deal.products.slice(0, 4)) // Limit to 4 total products
-        }
-      })
-      
-      // Limit to 4 products maximum
-      const limitedProducts = allFeaturedProducts.slice(0, 4)
-      
-      // REAL-TIME: No caching - always use fresh data
-      setFeaturedProducts(limitedProducts)
-      setDeals(result.data)
-    } catch (error: any) {
-      console.error('Error fetching featured deals:', error)
-      setError(error.message || 'Failed to load featured deals')
-      setFeaturedProducts([])
-      setDeals([])
-    } finally {
-      setIsLoadingDeals(false)
-    }
-  }
-  
+  const { featuredProducts, isLoading: isLoadingDeals, error, refetch } = useDeals({ featured: true, limit: 4 })
+  const [isMounted, setIsMounted] = useState(false)
+
   useEffect(() => {
-    fetchFeaturedDeals()
-    
-    // REAL-TIME: Listen for deal changes and auto-refresh
-    const handleDealsChanged = () => {
-      console.log('Deals changed - refreshing featured deals')
-      fetchFeaturedDeals()
-    }
-    
-    window.addEventListener('dealsChanged', handleDealsChanged)
-    
-    return () => {
-      window.removeEventListener('dealsChanged', handleDealsChanged)
-    }
+    setIsMounted(true)
   }, [])
-  
+
+  // Prevent hydration mismatch
+  if (!isMounted) {
+    return (
+      <div className="bg-gray-50 py-8">
+        <div className="container mx-auto px-4">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold">Featured Deals</h2>
+            <div className="text-sm text-gray-600">
+              Limited time offers
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Card key={i} className="animate-pulse">
+                <CardContent className="p-4">
+                  <div className="bg-gray-200 h-48 rounded-lg mb-4"></div>
+                  <div className="space-y-2">
+                    <div className="bg-gray-200 h-4 rounded w-full"></div>
+                    <div className="bg-gray-200 h-4 rounded w-2/3"></div>
+                    <div className="bg-gray-200 h-6 rounded w-1/3"></div>
+                    <div className="bg-gray-200 h-8 rounded w-full"></div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const handleRetry = () => {
-    // REAL-TIME: No cache to clear, just refetch
-    fetchFeaturedDeals()
+    refetch()
   }
   
   const getDealIcon = (dealType: string) => {

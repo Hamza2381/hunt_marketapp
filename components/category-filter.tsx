@@ -1,11 +1,10 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Loader2, AlertCircle, RefreshCw } from "lucide-react"
-import { fastCache } from "@/lib/fast-cache"
-import { globalEvents, EVENTS } from "@/lib/global-events"
+import { useCategories } from "@/hooks/use-categories"
 
 interface Category {
   id: number
@@ -21,123 +20,33 @@ interface CategoryFilterProps {
 }
 
 export function CategoryFilter({ selectedCategory, onSelectCategory, onCategoriesLoaded }: CategoryFilterProps) {
-  const [categories, setCategories] = useState<Category[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  
-  const fetchCategories = async () => {
-    try {
-      setIsLoading(true)
-      setError(null)
-      
-      // FORCE FRESH DATA - NO CACHING AT ALL
-      console.log('Fetching categories from API...')
-      
-      const timestamp = Date.now()
-      const randomParam = Math.random().toString(36)
-      const response = await fetch(`/api/categories?_t=${timestamp}&_r=${randomParam}`, {
-        method: 'GET',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0'
-        },
-        cache: 'no-store'
-      })
-      
-      if (!response.ok) {
-        console.error(`Categories API error: ${response.status} ${response.statusText}`)
-        const errorText = await response.text()
-        console.error('Error response:', errorText)
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-      
-      const result = await response.json()
-      
-      if (!result.success) {
-        console.error('Categories API returned error:', result.error)
-        throw new Error(result.error || 'Failed to fetch categories')
-      }
-      
-      const categoriesData = result.data || []
-      console.log('Categories fetched successfully:', categoriesData.length)
-      
-      // NO CACHING: Always use fresh data
-      setCategories(categoriesData)
-      onCategoriesLoaded?.(categoriesData)
-      
-    } catch (err: any) {
-      console.error('Error fetching categories for filter:', err)
-      setError(err.message || 'Failed to load categories')
-      
-      // Try to load default categories as fallback
-      const defaultCategories = [
-        { id: 1, name: 'Paper', description: 'All types of paper products', productCount: 0 },
-        { id: 2, name: 'Ink & Toner', description: 'Printer cartridges and toner', productCount: 0 },
-        { id: 3, name: 'Office Supplies', description: 'Essential office supplies', productCount: 0 },
-        { id: 4, name: 'Technology', description: 'Computer accessories and electronics', productCount: 0 },
-        { id: 5, name: 'Coffee & Snacks', description: 'Break room supplies', productCount: 0 },
-        { id: 6, name: 'Cleaning', description: 'Cleaning supplies and janitorial products', productCount: 0 }
-      ]
-      
-      setCategories(defaultCategories)
-      onCategoriesLoaded?.(defaultCategories)
-    } finally {
-      setIsLoading(false)
-    }
-  }
-  
-  // Real-time updates for category product counts
-  const handleInventoryChange = useCallback((event: { type: string; product: any }) => {
-    setCategories(prev => {
-      // Real-time updates for category product counts
-      const updatedCategories = prev.map(category => {
-        if (category.id === event.product.category_id) {
-          const currentCount = category.productCount || 0
-          let newCount = currentCount
-          
-          switch (event.type) {
-            case 'added':
-              newCount = currentCount + 1
-              break
-            case 'deleted':
-              newCount = Math.max(0, currentCount - 1)
-              break
-            case 'updated':
-              // For updates, we don't change the count unless category changed
-              newCount = currentCount
-              break
-          }
-          
-          return {
-            ...category,
-            productCount: newCount
-          }
-        }
-        return category
-      })
-      
-      // NO CACHING: Just return updated data
-      return updatedCategories
-    })
-  }, [])
-  
+  const { categories, isLoading, error, refetch } = useCategories()
+  const [isMounted, setIsMounted] = useState(false)
+
   useEffect(() => {
-    // Listen for inventory changes to update product counts in real-time
-    const unsubscribe = globalEvents.on(EVENTS.INVENTORY_CHANGED, handleInventoryChange)
-    
-    // Initial data load
-    fetchCategories()
-    
-    return () => {
-      unsubscribe()
+    setIsMounted(true)
+  }, [])
+
+  useEffect(() => {
+    if (categories.length > 0) {
+      onCategoriesLoaded?.(categories)
     }
-  }, [handleInventoryChange])
-  
+  }, [categories, onCategoriesLoaded])
+
+  // Prevent hydration mismatch
+  if (!isMounted) {
+    return (
+      <div className="flex justify-center py-4">
+        <div className="flex flex-col items-center space-y-2">
+          <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
+          <p className="text-xs text-gray-500">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
   const handleRetry = () => {
-    // NO CACHE TO CLEAR: Just refetch
-    fetchCategories()
+    refetch()
   }
   
   if (isLoading) {

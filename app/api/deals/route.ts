@@ -139,9 +139,13 @@ export async function GET(request: NextRequest) {
       data: transformedDeals
     }, {
       headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Cache-Control': 'no-cache, no-store, must-revalidate, proxy-revalidate, max-age=0, s-maxage=0',
         'Pragma': 'no-cache',
-        'Expires': '0'
+        'Expires': '0',
+        'CDN-Cache-Control': 'no-cache',
+        'Vercel-CDN-Cache-Control': 'no-cache',
+        'Surrogate-Control': 'no-cache',
+        'X-Accel-Expires': '0'
       }
     })
 

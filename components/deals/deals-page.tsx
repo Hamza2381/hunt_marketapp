@@ -9,127 +9,56 @@ import { Star, Clock, Flame, Zap, Loader2, AlertCircle, RefreshCw, ShoppingCart 
 import { useCart } from "@/hooks/use-cart"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/hooks/use-auth"
-import { fastCache, CACHE_KEYS } from "@/lib/fast-cache"
+import { useDeals } from "@/hooks/use-deals"
 import Link from "next/link"
-
-interface DealProduct {
-  id: number
-  name: string
-  sku: string
-  price: number
-  stock_quantity: number
-  image_url: string
-  status: string
-  deal_id: number
-  deal_title: string
-  deal_type: string
-  original_price: number
-  discounted_price: number
-  savings: number
-  discount_percentage: number
-  time_left: string
-  banner_text?: string
-  usage_limit?: number
-  usage_count: number
-  is_limited_stock: boolean
-}
-
-interface Deal {
-  id: number
-  title: string
-  description: string
-  deal_type: string
-  discount_type: string
-  discount_value: number
-  start_date: string
-  end_date: string
-  status: string
-  is_featured: boolean
-  products: DealProduct[]
-}
 
 export function DealsPage() {
   const [sortBy, setSortBy] = useState("discount")
   const [filterBy, setFilterBy] = useState("all")
-  const [deals, setDeals] = useState<Deal[]>([])
-  const [allProducts, setAllProducts] = useState<DealProduct[]>([])
-  const [isLoadingDeals, setIsLoadingDeals] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [isMounted, setIsMounted] = useState(false)
   const { addItem } = useCart()
   const { toast } = useToast()
   const { isAuthenticated, isLoading } = useAuth()
+  const { deals, isLoading: isLoadingDeals, error, refetch } = useDeals()
 
-  // Fetch deals data
-  const fetchDeals = async () => {
-    try {
-      setIsLoadingDeals(true)
-      setError(null)
-      
-      // REAL-TIME: No caching - always fetch fresh data
-      const timestamp = Date.now()
-      const randomParam = Math.random().toString(36)
-      const response = await fetch(`/api/deals?_t=${timestamp}&_r=${randomParam}`, {
-        method: 'GET',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0'
-        },
-        credentials: 'include',
-        cache: 'no-store'
-      })
-      
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`)
-      }
-      
-      const result = await response.json()
-      
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to fetch deals')
-      }
-      
-      // Extract all products from deals
-      const allDealProducts: DealProduct[] = []
-      result.data.forEach((deal: Deal) => {
-        if (deal.products && deal.products.length > 0) {
-          allDealProducts.push(...deal.products)
-        }
-      })
-      
-      // REAL-TIME: No caching - always use fresh data
-      setAllProducts(allDealProducts)
-      setDeals(result.data)
-      
-    } catch (error: any) {
-      console.error('Error fetching deals:', error)
-      setError(error.message || 'Failed to load deals')
-      setAllProducts([])
-    } finally {
-      setIsLoadingDeals(false)
-    }
-  }
-  
   useEffect(() => {
-    fetchDeals()
-    
-    // REAL-TIME: Listen for deal changes and auto-refresh
-    const handleDealsChanged = () => {
-      console.log('Deals changed - refreshing deals page')
-      fetchDeals()
-    }
-    
-    window.addEventListener('dealsChanged', handleDealsChanged)
-    
-    return () => {
-      window.removeEventListener('dealsChanged', handleDealsChanged)
-    }
+    setIsMounted(true)
   }, [])
-  
+
+  // Extract all products from deals
+  const allProducts = deals.flatMap(deal => deal.products || [])
+
+  // Prevent hydration mismatch
+  if (!isMounted) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-8">
+        <div className="container mx-auto px-4">
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold mb-2">🔥 Hot Deals & Special Offers</h1>
+            <p className="text-gray-600">Limited time offers - save big on business essentials!</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Card key={i} className="animate-pulse">
+                <CardContent className="p-4">
+                  <div className="bg-gray-200 h-48 rounded-lg mb-4"></div>
+                  <div className="space-y-2">
+                    <div className="bg-gray-200 h-4 rounded w-full"></div>
+                    <div className="bg-gray-200 h-4 rounded w-2/3"></div>
+                    <div className="bg-gray-200 h-6 rounded w-1/3"></div>
+                    <div className="bg-gray-200 h-8 rounded w-full"></div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const handleRetry = () => {
-    // REAL-TIME: No cache to clear, just refetch
-    fetchDeals()
+    refetch()
   }
   
   const filteredDeals = allProducts.filter((product) => {
