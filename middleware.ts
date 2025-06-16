@@ -5,8 +5,21 @@ export function middleware(request: NextRequest) {
   // Clone the response
   const response = NextResponse.next();
 
-  // Add cache control headers to improve back navigation
-  response.headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+  // Only apply aggressive caching to static assets, not dynamic pages
+  if (request.nextUrl.pathname.startsWith('/_next/static') || 
+      request.nextUrl.pathname.startsWith('/_next/image') ||
+      request.nextUrl.pathname.endsWith('.ico') ||
+      request.nextUrl.pathname.endsWith('.png') ||
+      request.nextUrl.pathname.endsWith('.jpg') ||
+      request.nextUrl.pathname.endsWith('.jpeg') ||
+      request.nextUrl.pathname.endsWith('.svg')) {
+    // Cache static assets aggressively
+    response.headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+  } else {
+    // For dynamic pages, allow fresh data loading while maintaining some caching for performance
+    response.headers.set('Cache-Control', 'public, max-age=0, must-revalidate');
+  }
+  
   response.headers.set('X-Content-Type-Options', 'nosniff');
 
   return response;
