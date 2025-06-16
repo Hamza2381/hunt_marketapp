@@ -54,9 +54,10 @@ export function FeaturedDeals() {
       setIsLoadingDeals(true)
       setError(null)
       
-      // REAL-TIME: No caching - always fetch fresh data
-      const timestamp = new Date().getTime()
-      const response = await fetch(`/api/deals?featured=true&limit=4&_t=${timestamp}`, {
+      // FORCE FRESH DATA - NO CACHING AT ALL
+      const timestamp = Date.now()
+      const randomParam = Math.random().toString(36)
+      const response = await fetch(`/api/deals?featured=true&limit=4&_t=${timestamp}&_r=${randomParam}`, {
         method: 'GET',
         headers: { 
           'Content-Type': 'application/json',
@@ -64,7 +65,8 @@ export function FeaturedDeals() {
           'Pragma': 'no-cache',
           'Expires': '0'
         },
-        credentials: 'include'
+        credentials: 'include',
+        cache: 'no-store'
       })
       
       if (!response.ok) {

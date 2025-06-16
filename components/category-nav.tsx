@@ -19,9 +19,10 @@ export function CategoryNav() {
   useEffect(() => {
     const fetchCategories = async () => {
       try {
-        // Add timestamp to prevent any caching
-        const timestamp = new Date().getTime()
-        const response = await fetch(`/api/categories?_t=${timestamp}`, {
+        // FORCE FRESH DATA - NO CACHING AT ALL
+        const timestamp = Date.now()
+        const randomParam = Math.random().toString(36)
+        const response = await fetch(`/api/categories?_t=${timestamp}&_r=${randomParam}`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -29,7 +30,7 @@ export function CategoryNav() {
             'Pragma': 'no-cache',
             'Expires': '0'
           },
-          cache: 'no-store' // Force no browser caching
+          cache: 'no-store'
         })
         const result = await response.json()
         
@@ -45,7 +46,13 @@ export function CategoryNav() {
       }
     }
 
+    // Fetch immediately
     fetchCategories()
+    
+    // Also fetch again after a short delay to ensure fresh data
+    const timeoutId = setTimeout(fetchCategories, 100)
+    
+    return () => clearTimeout(timeoutId)
   }, [])
 
   if (isLoading) {

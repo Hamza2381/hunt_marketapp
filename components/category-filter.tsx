@@ -30,12 +30,12 @@ export function CategoryFilter({ selectedCategory, onSelectCategory, onCategorie
       setIsLoading(true)
       setError(null)
       
-      // FORCE FRESH DATA: Always fetch from API, no client-side caching
+      // FORCE FRESH DATA - NO CACHING AT ALL
       console.log('Fetching categories from API...')
       
-      // Add timestamp to prevent any caching
-      const timestamp = new Date().getTime()
-      const response = await fetch(`/api/categories?_t=${timestamp}`, {
+      const timestamp = Date.now()
+      const randomParam = Math.random().toString(36)
+      const response = await fetch(`/api/categories?_t=${timestamp}&_r=${randomParam}`, {
         method: 'GET',
         headers: { 
           'Content-Type': 'application/json',
@@ -43,7 +43,7 @@ export function CategoryFilter({ selectedCategory, onSelectCategory, onCategorie
           'Pragma': 'no-cache',
           'Expires': '0'
         },
-        cache: 'no-store' // Force no browser caching
+        cache: 'no-store'
       })
       
       if (!response.ok) {

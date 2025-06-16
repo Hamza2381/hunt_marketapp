@@ -105,8 +105,10 @@ export function ProductGrid({
       setIsLoading(true)
       setError(null)
       
-      // FORCE FRESH DATA: No client-side caching
-      const response = await fetch(`/api/products${onlyFeatured ? '?featured=true' : ''}`, {
+      // FORCE FRESH DATA - NO CACHING AT ALL
+      const timestamp = Date.now()
+      const randomParam = Math.random().toString(36)
+      const response = await fetch(`/api/products${onlyFeatured ? '?featured=true' : ''}${onlyFeatured ? '&' : '?'}_t=${timestamp}&_r=${randomParam}`, {
         method: 'GET',
         headers: { 
           'Content-Type': 'application/json',
@@ -115,7 +117,7 @@ export function ProductGrid({
           'Expires': '0'
         },
         credentials: 'include',
-        cache: 'no-store' // Force no browser caching
+        cache: 'no-store'
       })
       
       if (!response.ok) {
